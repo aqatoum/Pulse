@@ -1,167 +1,311 @@
-const { getSignal } = require("./signalRegistry");
+// pulse-api/src/services/analytics/interpretation.service.js
 
-/**
- * Decide alert level (3-state) – must remain compatible with consensus:
- * info / watch / alert  :contentReference[oaicite:4]{index=4}
- */
-function decideAlertLevel({ lastZ, UCL }) {
-  if (UCL === null || typeof lastZ !== "number") return "info";
-  if (lastZ > UCL) return "alert";
-  if (lastZ > UCL * 0.85) return "watch"; // existing behavior :contentReference[oaicite:5]{index=5}
-  return "info";
+function fmt(n, d = 2) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return null;
+  return Number(x.toFixed(d));
 }
 
-/**
- * 4-band risk indicator (0..3) for UI clarity.
- * This does NOT replace alertLevel; it complements it.
- *
- * Band idea (relative to UCL):
- * 0: Stable            (<= 0.70 UCL)
- * 1: Guarded           (0.70 .. 0.85 UCL)
- * 2: Watch             (0.85 .. 1.00 UCL)
- * 3: Alert             (>  1.00 UCL)
- */
-function riskBand4({ lastZ, UCL }) {
-  if (UCL === null || typeof lastZ !== "number" || UCL <= 0) return 0;
-  const r = lastZ / UCL;
-  if (r > 1.0) return 3;
-  if (r >= 0.85) return 2;
-  if (r >= 0.70) return 1;
-  return 0;
+function pct(x, d = 1) {
+  const v = Number(x);
+  if (!Number.isFinite(v)) return null;
+  return `${(v * 100).toFixed(d)}%`;
 }
 
-function riskBandLabel(lang, band) {
-  const b = Number(band || 0);
-  const ar = ["مستقر", "حذر", "مراقبة", "إنذار"];
-  const en = ["Stable", "Guarded", "Watch", "Alert"];
-  return (lang === "ar" ? ar : en)[Math.max(0, Math.min(3, b))];
+function upper(x) {
+  return String(x || "").toUpperCase();
 }
 
-/**
- * Estimate confidence level based on data sufficiency and consistency
- */
-function decideConfidence({ points = [], recentN = 0 }) {
-  const weeks = points.length;
+function lastOf(points = []) {
+  if (!Array.isArray(points) || points.length === 0) return null;
+  return points[points.length - 1];
+}
 
-  if (weeks >= 8 && recentN >= 20) {
-    return { level: "high", label: "High confidence" };
+function recentSlice(points = [], k = 12) {
+  if (!Array.isArray(points)) return [];
+  return points.slice(Math.max(0, points.length - k));
+}
+
+function classifyAlertLevel({ method, points }) {
+  const p = lastOf(points);
+  if (!p) return { alertLevel: "info", band: 0 };
+
+  // Prefer explicit alert boolean if present
+  const isAlert = !!p.alert;
+
+  // Watch: near-threshold (if we have expected/UCL)
+  const hasUcl = Number.isFinite(Number(p.UCL));
+  const hasExpected = Number.isFinite(Number(p.expected));
+  const val = Number.isFinite(Number(p.low)) ? Number(p.low) : Number(p.z);
+
+  if (isAlert) return { alertLevel: "alert", band: 3 };
+
+  if (hasUcl && Number.isFinite(val)) {
+    const ratio = p.UCL > 0 ? val / p.UCL : 0;
+    if (ratio >= 0.8) return { alertLevel: "watch", band: 2 };
   }
 
-  if (weeks >= 4 && recentN >= 10) {
-    return { level: "medium", label: "Moderate confidence" };
-  }
-
-  return { level: "low", label: "Low confidence (limited data)" };
+  // Otherwise stable/info
+  return { alertLevel: "info", band: 0 };
 }
 
-function confidenceLabel(lang, level) {
-  const v = String(level || "low").toLowerCase();
+function confidenceFromData(points = []) {
+  const n = Array.isArray(points) ? points.length : 0;
+  if (n >= 80) return { level: "high", label: { en: "High confidence", ar: "ثقة عالية" } };
+  if (n >= 30) return { level: "medium", label: { en: "Moderate confidence", ar: "ثقة متوسطة" } };
+  return { level: "low", label: { en: "Low confidence", ar: "ثقة منخفضة" } };
+}
+
+function bandLabel(band, lang) {
+  const ar = ["مستقر", "انتباه", "مراقبة", "إنذار"];
+  const en = ["Stable", "Attention", "Watch", "Alert"];
+  return (lang === "ar" ? ar : en)[band] || (lang === "ar" ? "غير محدد" : "Unknown");
+}
+
+function buildFarringtonText({ language, signalType, method, points, meta }) {
+  const lang = language === "ar" ? "ar" : "en";
+  const last = lastOf(points);
+  const recent = recentSlice(points, 12);
+
+  const baselineWeeks = meta?.baselineWeeks ?? null;
+  const z = meta?.z ?? null;
+
+  const lastWeek = last?.week ?? null;
+  const n = Number.isFinite(Number(last?.n)) ? Number(last.n) : null;
+  const low = Number.isFinite(Number(last?.low)) ? Number(last.low) : null;
+  const expected = Number.isFinite(Number(last?.expected)) ? Number(last.expected) : null;
+  const UCL = Number.isFinite(Number(last?.UCL)) ? Number(last.UCL) : null;
+
+  const lowRate = (n && low !== null) ? low / n : null;
+  const exceed = (low !== null && UCL !== null) ? (low - UCL) : null;
+
+  const alertsRecent = recent.filter(p => !!p.alert).length;
+  const weeksRecent = recent.length;
+
+  const cls = classifyAlertLevel({ method, points });
+  const conf = confidenceFromData(points);
+
+  const riskLabel = bandLabel(cls.band, lang);
+
+  // ---------- Arabic ----------
   if (lang === "ar") {
-    if (v === "high") return "ثقة عالية";
-    if (v === "medium") return "ثقة متوسطة";
-    return "ثقة منخفضة";
-  }
-  if (v === "high") return "High confidence";
-  if (v === "medium") return "Moderate confidence";
-  return "Low confidence";
-}
+    const title =
+      cls.alertLevel === "alert"
+        ? "إنذار شذوذ إحصائي: ارتفاع غير معتاد في حالات فقر الدم"
+        : cls.alertLevel === "watch"
+        ? "مراقبة: اقتراب المؤشر من حد الإنذار الإحصائي"
+        : "استقرار: لا توجد إشارة تفشٍ غير معتادة حاليًا";
 
-/**
- * Main Interpretation Generator
- */
-function generateInterpretation({
-  language = "en",
-  signalType,
-  method,
-  lastZ,
-  UCL,
-  points = [],
-  recentN = 0,
-  // extra meta (optional)
-  preset = null,
-  timeRange = null,
-}) {
-  const signal = getSignal(signalType);
+    const summaryLines = [
+      `تم تحليل مؤشر فقر الدم على مستوى السكان باستخدام طريقة ${upper(method)} اعتمادًا على التجميع الأسبوعي لعدد الحالات المنخفضة Hb.`,
+      baselineWeeks ? `المرجع (Baseline): آخر ${baselineWeeks} أسابيع مماثلة.` : null,
+      Number.isFinite(Number(z)) ? `عتبة الشذوذ (z): ${fmt(z, 2)}.` : null,
+      lastWeek ? `الأسبوع الجاري: ${lastWeek}.` : null,
+      (n !== null && low !== null) ? `عدد الفحوصات: ${n} • الحالات المنخفضة: ${low} (${lowRate !== null ? pct(lowRate) : "—"}).` : null,
+      (expected !== null && UCL !== null && low !== null)
+        ? `المتوقع: ${fmt(expected, 2)} • الحد الأعلى (UCL): ${fmt(UCL, 2)} • الفارق عن الحد: ${fmt(exceed, 2)}.`
+        : null,
+      weeksRecent ? `آخر ${weeksRecent} أسبوعًا: رُصد ${alertsRecent} أسبوع/أسابيع بإنذار.` : null,
+    ].filter(Boolean);
 
-  if (!signal) {
+    const recommendedActions = [];
+    if (cls.alertLevel === "alert") {
+      recommendedActions.push(
+        "تفعيل تحقق وبائي سريع: مراجعة جودة البيانات (ازدواجية/تواريخ/رموز) ثم تأكيد الارتفاع عبر مصادر إضافية إن أمكن.",
+        "تقسيم التحليل حسب العمر/الجنس/الموقع داخل المنطقة لتحديد أين يتركز الارتفاع.",
+        "مراجعة العوامل المحتملة: تغيرات التغطية المخبرية، انقطاع إمدادات الحديد، أو عوامل موسمية/غذائية."
+      );
+    } else if (cls.alertLevel === "watch") {
+      recommendedActions.push(
+        "تكثيف المراقبة للأسبوعين القادمين مع الحفاظ على نفس إعدادات الحساسية لضمان قابلية المقارنة.",
+        "مراجعة حجم العينات الأسبوعي؛ انخفاض/ارتفاع n قد يؤثر على تفسير الإشارة."
+      );
+    } else {
+      recommendedActions.push(
+        "الاستمرار في المراقبة الأسبوعية الروتينية.",
+        "التحقق دوريًا من اكتمال البيانات واتساق الرموز (facilityId / regionId / labId)."
+      );
+    }
+
+    const narrative =
+      summaryLines.join("\n") +
+      "\n\n" +
+      "ملاحظة منهجية:\n" +
+      "طريقة Farrington تقارن عدد الحالات المرصودة أسبوعيًا بما هو متوقع من التاريخ القريب (Baseline)، وتطلق إنذارًا عندما يتجاوز المرصود حدًا إحصائيًا أعلى (UCL). هذا يهدف لاكتشاف الارتفاعات غير المعتادة مبكرًا على مستوى السكان.";
+
     return {
-      title: language === "ar" ? "إشارة غير معرّفة" : "Undefined signal",
-      summary:
-        language === "ar"
-          ? "لم يتم العثور على تعريف علمي لهذه الإشارة."
-          : "No scientific definition was found for this signal.",
-      alertLevel: "info",
-      riskBand: 0,
-      riskLabel: riskBandLabel(language, 0),
-      confidenceLevel: "low",
-      confidenceLabel: language === "ar" ? "ثقة منخفضة" : "Low confidence",
-      recommendedActions: [],
+      signal: signalType,
+      method,
+      alertLevel: cls.alertLevel,
+      riskBand: cls.band,
+      riskLabel,
+      confidenceLevel: conf.level,
+      confidenceLabel: conf.label.ar,
+      title,
+      summary: summaryLines.slice(0, 3).join(" "),
+      narrative,
+      recommendedActions,
       disclaimer:
-        language === "ar"
-          ? "هذا التفسير آلي ومخصص لأغراض دعم القرار فقط."
-          : "This interpretation is automated and intended for decision support only.",
-      meta: { preset, timeRange },
+        "هذا التحليل آلي لدعم قرار الصحة العامة على مستوى السكان، ولا يُستخدم للتشخيص الفردي.",
+      meta: {
+        timeRange: meta?.timeRange ?? null,
+        baselineWeeks,
+        z,
+        lastWeek,
+        n,
+        low,
+        lowRate: lowRate !== null ? fmt(lowRate, 4) : null,
+        expected: expected !== null ? fmt(expected, 2) : null,
+        UCL: UCL !== null ? fmt(UCL, 2) : null,
+        alertsInLast12: alertsRecent,
+      },
     };
   }
 
-  const alertLevel = decideAlertLevel({ lastZ, UCL });
-  const band = riskBand4({ lastZ, UCL });
-  const confidence = decideConfidence({ points, recentN });
-
+  // ---------- English ----------
   const title =
-    language === "ar" ? `مؤشر ${signal.description.ar}` : `${signal.description.en}`;
+    cls.alertLevel === "alert"
+      ? "Statistical alert: unusual increase in low-Hb counts"
+      : cls.alertLevel === "watch"
+      ? "Watch: indicator approaching the statistical threshold"
+      : "Stable: no unusual outbreak signal detected";
 
-  const rangeTxt =
-    timeRange?.start || timeRange?.end
-      ? language === "ar"
-        ? ` ضمن نطاق زمني (${timeRange.start || "—"} → ${timeRange.end || "—"})`
-        : ` within a time range (${timeRange.start || "—"} → ${timeRange.end || "—"})`
-      : "";
+  const summaryLines = [
+    `We analyzed a population-level anemia signal using the ${upper(method)} approach on weekly aggregated low-Hb counts.`,
+    baselineWeeks ? `Baseline: the most recent ${baselineWeeks} comparable weeks.` : null,
+    Number.isFinite(Number(z)) ? `Outlier threshold (z): ${fmt(z, 2)}.` : null,
+    lastWeek ? `Current week: ${lastWeek}.` : null,
+    (n !== null && low !== null) ? `Tests: ${n} • Low-Hb cases: ${low} (${lowRate !== null ? pct(lowRate) : "—"}).` : null,
+    (expected !== null && UCL !== null && low !== null)
+      ? `Expected: ${fmt(expected, 2)} • Upper limit (UCL): ${fmt(UCL, 2)} • Margin vs UCL: ${fmt(exceed, 2)}.`
+      : null,
+    weeksRecent ? `Last ${weeksRecent} weeks: ${alertsRecent} alert week(s) detected.` : null,
+  ].filter(Boolean);
 
-  const presetTxt =
-    preset
-      ? language === "ar"
-        ? ` (حساسية: ${preset})`
-        : ` (sensitivity: ${preset})`
-      : "";
+  const recommendedActions = [];
+  if (cls.alertLevel === "alert") {
+    recommendedActions.push(
+      "Trigger rapid epidemiologic verification: validate data quality (duplicates, dates, coding), then corroborate the increase with additional sources if available.",
+      "Stratify by age/sex and sub-locations to localize the signal.",
+      "Review plausible drivers: testing coverage changes, supply/availability of iron supplements, or seasonal/nutritional patterns."
+    );
+  } else if (cls.alertLevel === "watch") {
+    recommendedActions.push(
+      "Increase monitoring frequency for the next 1–2 weeks while keeping sensitivity settings unchanged for comparability.",
+      "Review weekly sample size (n), as volume shifts can affect interpretation."
+    );
+  } else {
+    recommendedActions.push(
+      "Continue routine weekly monitoring.",
+      "Periodically verify data completeness and identifier consistency (facilityId / regionId / labId)."
+    );
+  }
 
-  const summary =
-    language === "ar"
-      ? `تم تحليل بيانات ${signal.biomarker} باستخدام طريقة ${method}${rangeTxt}${presetTxt}. مستوى الإشارة: ${alertLevel}. مستوى الخطر (4 مستويات): ${riskBandLabel(
-          language,
-          band
-        )}.`
-      : `${signal.biomarker} data were analyzed using the ${method} method${rangeTxt}${presetTxt}. Signal level: ${alertLevel}. Risk (4-band): ${riskBandLabel(
-          language,
-          band
-        )}.`;
-
-  const recommendedActions =
-    signal.defaultActions?.[alertLevel]?.[language] || [];
-
-  const disclaimer =
-    language === "ar"
-      ? "هذا التحليل آلي ويهدف إلى دعم القرار الصحي السكاني ولا يُعد تشخيصًا فرديًا."
-      : "This analysis is automated and intended to support population-level public health decisions, not individual diagnosis.";
+  const narrative =
+    summaryLines.join("\n") +
+    "\n\n" +
+    "Method note:\n" +
+    "Farrington-style detection compares observed weekly counts to an expected baseline derived from recent history, and flags an alert when observations exceed an upper statistical limit (UCL). It is designed for early detection of unusual population-level increases.";
 
   return {
     signal: signalType,
     method,
-    alertLevel, // 3-state for consensus
-    riskBand: band, // 4-state for UI clarity
-    riskLabel: riskBandLabel(language, band),
-    confidenceLevel: confidence.level,
-    confidenceLabel: confidenceLabel(language, confidence.level),
+    alertLevel: cls.alertLevel,
+    riskBand: cls.band,
+    riskLabel,
+    confidenceLevel: conf.level,
+    confidenceLabel: conf.label.en,
     title,
-    summary,
+    summary: summaryLines.slice(0, 3).join(" "),
+    narrative,
     recommendedActions,
-    disclaimer,
-    meta: { preset, timeRange, lastZ, UCL },
+    disclaimer:
+      "This is an automated, population-level decision-support signal and is not intended for individual diagnosis.",
+    meta: {
+      timeRange: meta?.timeRange ?? null,
+      baselineWeeks,
+      z,
+      lastWeek,
+      n,
+      low,
+      lowRate: lowRate !== null ? fmt(lowRate, 4) : null,
+      expected: expected !== null ? fmt(expected, 2) : null,
+      UCL: UCL !== null ? fmt(UCL, 2) : null,
+      alertsInLast12: alertsRecent,
+    },
   };
 }
 
-module.exports = {
-  generateInterpretation,
-  decideAlertLevel,
-  decideConfidence,
-};
+/**
+ * Main generator used across methods.
+ * Keep it simple: route to method-specific builders when needed.
+ */
+function generateInterpretation({
+  language = "en",
+  signalType = "anemia",
+  method = "UNKNOWN",
+  points = [],
+  // meta is flexible: can include baselineWeeks, z, timeRange, etc.
+  baselineWeeks,
+  z,
+  timeRange,
+} = {}) {
+  const meta = { baselineWeeks, z, timeRange };
+  const m = String(method || "").toUpperCase();
+
+  if (m === "FARRINGTON") {
+    return buildFarringtonText({
+      language,
+      signalType,
+      method: m,
+      points,
+      meta,
+    });
+  }
+
+  // Default fallback for other methods (kept brief)
+  const lang = String(language || "en").toLowerCase() === "ar" ? "ar" : "en";
+  const conf = confidenceFromData(points);
+  const cls = classifyAlertLevel({ method: m, points });
+  const riskLabel = bandLabel(cls.band, lang);
+
+  if (lang === "ar") {
+    return {
+      signal: signalType,
+      method: m,
+      alertLevel: cls.alertLevel,
+      riskBand: cls.band,
+      riskLabel,
+      confidenceLevel: conf.level,
+      confidenceLabel: conf.label.ar,
+      title: "ملخص تحليلي آلي للمؤشر",
+      summary: `تم تطبيق ${m} على الإشارة. النتيجة الحالية: ${riskLabel}.`,
+      narrative:
+        `تم تطبيق ${m} على بيانات الأسبوعية لتقييم وجود تغير غير معتاد. النتيجة الحالية: ${riskLabel}.\n\nهذا نص افتراضي مختصر—يمكن تخصيصه لكل طريقة لاحقًا.`,
+      recommendedActions: ["مراجعة جودة البيانات والمتابعة الدورية."],
+      disclaimer:
+        "هذا التحليل آلي لدعم قرار الصحة العامة على مستوى السكان، ولا يُستخدم للتشخيص الفردي.",
+      meta,
+    };
+  }
+
+  return {
+    signal: signalType,
+    method: m,
+    alertLevel: cls.alertLevel,
+    riskBand: cls.band,
+    riskLabel,
+    confidenceLevel: conf.level,
+    confidenceLabel: conf.label.en,
+    title: "Automated analytic summary",
+    summary: `Method ${m} applied to the signal. Current status: ${riskLabel}.`,
+    narrative:
+      `We applied ${m} to the weekly series to assess whether the recent pattern is unusual. Current status: ${riskLabel}.\n\nThis is a brief default template and can be specialized per method.`,
+    recommendedActions: ["Verify data quality and continue routine monitoring."],
+    disclaimer:
+      "This is an automated, population-level decision-support signal and is not intended for individual diagnosis.",
+    meta,
+  };
+}
+
+module.exports = { generateInterpretation };

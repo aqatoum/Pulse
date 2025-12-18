@@ -16,7 +16,7 @@ const TXT = {
     region: "رمز المنطقة",
     lab: "رمز المختبر (اختياري)",
     placeholderFacility: "مثال: AMM-NEWCAMP-01",
-    placeholderRegion: "مثال: AMMAN-NEWCAMP",
+    placeholderRegion: "مثال: AMMAN_SOUTH",
     placeholderLab: "مثال: LAB-01",
 
     signal: "الإشارة",
@@ -98,6 +98,9 @@ const TXT = {
     strat: "التقسيم السكاني",
     narrative: "التقرير السردي",
 
+    infoTitle: "INFO",
+    infoHint: "وصف علمي مختصر للنطاق والطرق وجودة البيانات وسبب إطلاق الإشارة.",
+
     chartsTitle: "الرسوم التوضيحية (لغير المختصين)",
     chartsHint:
       "الفكرة ببساطة: الخط يمثل تغير المؤشر عبر الزمن. الخط المتقطع هو الحد الذي عند تجاوزه تصبح الإشارة غير معتادة إحصائيًا. الدائرة الفارغة تعني نقطة إنذار.",
@@ -109,10 +112,6 @@ const TXT = {
     advancedActive: "متقدمة",
     yes: "نعم",
     no: "لا",
-
-    scopeBadgeLabel: "النطاق",
-    facilityShort: "مرفق",
-    regionShort: "منطقة",
   },
   en: {
     title: "Epidemiological Surveillance Dashboard",
@@ -125,7 +124,7 @@ const TXT = {
     region: "Region code",
     lab: "Lab code (optional)",
     placeholderFacility: "e.g., AMM-NEWCAMP-01",
-    placeholderRegion: "e.g., AMMAN-NEWCAMP",
+    placeholderRegion: "e.g., AMMAN_SOUTH",
     placeholderLab: "e.g., LAB-01",
 
     signal: "Signal",
@@ -207,6 +206,9 @@ const TXT = {
     strat: "Population stratification",
     narrative: "Narrative report",
 
+    infoTitle: "INFO",
+    infoHint: "A scientific snapshot of scope, methods, data quality, and why the signal was triggered.",
+
     chartsTitle: "Visual explanation (non-specialist friendly)",
     chartsHint:
       "Simply: the line shows how the indicator changes over time. The dashed line is the statistical threshold. Hollow circles mark alert points.",
@@ -218,10 +220,6 @@ const TXT = {
     advancedActive: "Advanced",
     yes: "Yes",
     no: "No",
-
-    scopeBadgeLabel: "Scope",
-    facilityShort: "Facility",
-    regionShort: "Region",
   },
 };
 
@@ -266,31 +264,6 @@ const styles = `
   .panelHeader{ display:flex; align-items:flex-start; justify-content:space-between; gap: 10px; margin-bottom: 12px; }
   .panelTitle{ font-weight: 900; font-size: 18px; letter-spacing: .2px; }
   .panelHint{ opacity:.8; font-size: 12px; margin-top: 2px; max-width: 760px; line-height: 1.5; }
-
-  /* ✅ Scope Badge */
-  .scopeBadge{
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
-    border-radius: 999px;
-    border: 1px solid rgba(255,255,255,0.14);
-    background: rgba(0,0,0,0.22);
-    color: rgba(255,255,255,0.92);
-    font-weight: 900;
-    font-size: 12px;
-    white-space: nowrap;
-  }
-  .scopeBadgeKey{ opacity: .75; font-weight: 900; }
-  .scopeBadgeVal{ font-weight: 950; }
-  .scopeBadgeFacility{
-    border-color: rgba(120, 200, 255, 0.35);
-    box-shadow: 0 0 0 3px rgba(120, 200, 255, 0.08);
-  }
-  .scopeBadgeRegion{
-    border-color: rgba(180, 255, 170, 0.30);
-    box-shadow: 0 0 0 3px rgba(180, 255, 170, 0.08);
-  }
 
   .formRow{ display:grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin-bottom: 10px; }
   .field label{ display:block; font-size: 12px; opacity:.85; margin-bottom: 6px; }
@@ -343,7 +316,7 @@ const styles = `
     border: 1px solid rgba(255,255,255,0.10);
   }
   .cardWide{ grid-column: 1 / -1; }
-  .cardHeader{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom: 10px; }
+  .cardHeader{ display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom: 10px; }
   .cardTitle{ font-weight: 900; letter-spacing: .2px; }
   .stats{ display:flex; gap: 14px; }
   .stat{ flex: 1; border-radius: 14px; padding: 12px; background: rgba(0,0,0,0.18); border: 1px solid rgba(255,255,255,0.10); }
@@ -506,6 +479,10 @@ function toNum(v) {
   return Number.isFinite(x) ? x : null;
 }
 
+function joinNonEmpty(parts, sep = " • ") {
+  return (parts || []).filter(Boolean).join(sep);
+}
+
 /* =========================
    ✅ Chart adapters
    ========================= */
@@ -561,7 +538,7 @@ function adaptFarrington(payload) {
   const series = (pts || [])
     .map((p) => ({
       label: p.week || p.label || "",
-      value: toNum(p.z) ?? toNum(p.score) ?? toNum(p.value) ?? toNum(p.obs) ?? toNum(p.observed),
+      value: toNum(p.z) ?? toNum(p.score) ?? toNum(p.value) ?? toNum(p.obs) ?? toNum(p.observed) ?? toNum(p.low),
       alert: !!(p.alert || p.isAlert),
     }))
     .filter((p) => p.value !== null);
@@ -685,6 +662,165 @@ function ParamSlider({ name, value, min, max, step = 0.1, onChange, hint }) {
 }
 
 /* =========================
+   ✅ Auto-generated INFO + Interpretation (from runData)
+   ========================= */
+function detectTriggerMethods(results) {
+  const out = [];
+  if (!results) return out;
+
+  const ewLast = Array.isArray(results?.ewma?.points) ? results.ewma.points[results.ewma.points.length - 1] : null;
+  const cuLast = Array.isArray(results?.cusum?.points) ? results.cusum.points[results.cusum.points.length - 1] : null;
+  const faLast = Array.isArray(results?.farrington?.points) ? results.farrington.points[results.farrington.points.length - 1] : null;
+
+  if (ewLast?.alert) out.push("EWMA");
+  if (cuLast?.alert) out.push("CUSUM");
+  if (faLast?.alert) out.push("FARRINGTON");
+
+  return out;
+}
+
+function buildInfoText({
+  lang,
+  scopeMode,
+  facilityId,
+  regionId,
+  labId,
+  presetLabel,
+  advanced,
+  methodsSelected,
+  decision,
+  counts,
+  dataRange,
+  dataQuality,
+  results,
+  lastUpdated,
+}) {
+  const isAR = lang === "ar";
+  const scopeName =
+    scopeMode === "facility"
+      ? (facilityId?.trim() ? `Facility: ${facilityId.trim()}` : "Facility: —")
+      : (regionId?.trim() ? `Region: ${regionId.trim()}` : "Region: —");
+
+  const scopeLine = isAR
+    ? (scopeMode === "facility"
+        ? `النطاق: مرفق صحي (${facilityId?.trim() || "—"})`
+        : `النطاق: منطقة (${regionId?.trim() || "—"})`)
+    : scopeName;
+
+  const labLine = labId?.trim()
+    ? (isAR ? `المختبر: ${labId.trim()}` : `Lab: ${labId.trim()}`)
+    : null;
+
+  const rangeLine = isAR
+    ? `النطاق الزمني المتوفر: ${dataRange?.start || "…"} → ${dataRange?.end || "…"}`
+    : `Available time range: ${dataRange?.start || "…"} → ${dataRange?.end || "…"}`;
+
+  const requestedLine = dataRange?.filtered
+    ? (isAR
+        ? `النطاق المطلوب (فلتر المستخدم): ${dataRange.filtered?.start || "…"} → ${dataRange.filtered?.end || "…"}`
+        : `Requested filter: ${dataRange.filtered?.start || "…"} → ${dataRange.filtered?.end || "…"}`)
+    : null;
+
+  const methodsLine = isAR
+    ? `الطرق المستخدمة: ${methodsSelected.map((m) => m.toUpperCase()).join(" + ")}`
+    : `Methods: ${methodsSelected.map((m) => m.toUpperCase()).join(" + ")}`;
+
+  const configLine = isAR
+    ? `الحساسية: ${presetLabel} • إعدادات متقدمة: ${advanced ? "نعم" : "لا"}`
+    : `Sensitivity: ${presetLabel} • Advanced tuning: ${advanced ? "Yes" : "No"}`;
+
+  const dq = dataQuality || {};
+  const dqLine = isAR
+    ? `جودة البيانات: إجمالي السجلات ${dq.overallN ?? "—"} • تغطية أسابيع ${dq.weeksCoverage ?? "—"} • أحدث أسبوع N=${dq.recentN ?? "—"}`
+    : `Data quality: total N=${dq.overallN ?? "—"} • weeks covered=${dq.weeksCoverage ?? "—"} • most recent week N=${dq.recentN ?? "—"}`;
+
+  const flags = [];
+  if (dq.smallN) flags.push(isAR ? "حجم عينة صغير (قد يرفع عدم اليقين)" : "Small sample size (higher uncertainty)");
+  if (dq.sparseSeries) flags.push(isAR ? "سلسلة زمنية قصيرة (تحتاج أسابيع أكثر)" : "Short time-series (needs more weeks)");
+  const flagsLine = flags.length ? (isAR ? `ملاحظات: ${flags.join(" • ")}` : `Notes: ${flags.join(" • ")}`) : null;
+
+  const triggers = detectTriggerMethods(results);
+  const triggerLine = isAR
+    ? (triggers.length
+        ? `سبب الإشارة: تجاوز حد الإنذار في ${triggers.join(" + ")} في الأسبوع الأخير.`
+        : `سبب الإشارة: لا يوجد تجاوز حد إنذار في الأسبوع الأخير (قد تكون إشارات سابقة أو ضمن النطاق).`)
+    : (triggers.length
+        ? `Signal driver: threshold exceeded by ${triggers.join(" + ")} in the most recent week.`
+        : `Signal driver: no threshold exceedance in the most recent week (may reflect earlier weeks or filter effects).`);
+
+  const ensembleLine = isAR
+    ? `ملخص التجميع: إنذار=${counts?.alert ?? 0} • مراقبة=${counts?.watch ?? 0} • القرار النهائي=${String(decision || "INFO").toUpperCase()}`
+    : `Ensemble: Alert=${counts?.alert ?? 0} • Watch=${counts?.watch ?? 0} • Final decision=${String(decision || "INFO").toUpperCase()}`;
+
+  const updatedLine = lastUpdated
+    ? (isAR ? `آخر تحديث للنظام: ${String(lastUpdated)}` : `System last updated: ${String(lastUpdated)}`)
+    : null;
+
+  const paragraphs = [
+    isAR
+      ? "ملخص علمي مُولَّد تلقائيًا من بيانات التحليل. يوضح النطاق، الطرق، جودة البيانات، ولماذا ظهر القرار بهذه الصورة."
+      : "Auto-generated scientific snapshot of this analysis, including scope, methods, data quality, and why the decision looks like this.",
+    joinNonEmpty([scopeLine, labLine]),
+    joinNonEmpty([rangeLine, requestedLine]),
+    methodsLine,
+    configLine,
+    dqLine,
+    flagsLine,
+    triggerLine,
+    ensembleLine,
+    updatedLine,
+  ].filter(Boolean);
+
+  return paragraphs.join("\n\n");
+}
+
+function buildInterpretationText({
+  lang,
+  sigPack,
+  decision,
+  counts,
+  methodsSelected,
+  results,
+}) {
+  const isAR = lang === "ar";
+  const triggers = detectTriggerMethods(results);
+
+  const intro = isAR
+    ? "تفسير علمي مُفصّل (آلي) يربط بين نتائج الخوارزميات ومعنى القرار من منظور مراقبة الصحة العامة."
+    : "Detailed auto-generated interpretation linking algorithm outputs to a public-health surveillance meaning.";
+
+  const ensemble = isAR
+    ? `تم تشغيل ${methodsSelected.length} طرق إحصائية (${methodsSelected.map((m) => m.toUpperCase()).join(", ")}). نتج عن ذلك: إنذار=${counts?.alert ?? 0}، مراقبة=${counts?.watch ?? 0}، وبناءً عليه القرار = ${String(decision || "INFO").toUpperCase()}.`
+    : `Ran ${methodsSelected.length} statistical methods (${methodsSelected.map((m) => m.toUpperCase()).join(", ")}). Ensemble summary: Alert=${counts?.alert ?? 0}, Watch=${counts?.watch ?? 0}, therefore decision = ${String(decision || "INFO").toUpperCase()}.`;
+
+  const driver = isAR
+    ? (triggers.length
+        ? `المحرك الأساسي للإشارة: ${triggers.join(" + ")} تجاوز/تجاوزت الحد الأعلى المتوقع في الأسبوع الأخير، وهو ما يُقرأ كارتفاع غير معتاد إحصائيًا مقارنة بخط الأساس.`
+        : `لم يظهر تجاوز لحد الإنذار في الأسبوع الأخير؛ قد تكون الإشارة مرتبطة بأسابيع سابقة داخل النطاق الزمني أو بقيم قريبة من الحد.`)
+    : (triggers.length
+        ? `Primary driver: ${triggers.join(" + ")} exceeded the expected upper threshold in the most recent week, suggesting an unusual statistical deviation from baseline.`
+        : `No threshold exceedance in the most recent week; the signal may relate to earlier weeks in the selected time window or near-threshold behavior.`);
+
+  const clinicalMeaning = isAR
+    ? "من منظور وبائي، هذا القرار لا يعني تشخيصًا فرديًا؛ بل يعني أن نمط النتائج (مجمّعًا أسبوعيًا) أصبح غير معتاد ويستحق الاستقصاء الميداني والمتابعة."
+    : "From an epidemiological standpoint, this is not an individual diagnosis; it indicates the weekly aggregated pattern has become unusual and warrants investigation and follow-up.";
+
+  const recommended = isAR
+    ? "توصية تشغيلية: التحقق من جودة الإدخال (التواريخ/المنطقة/المرفق)، مراجعة التوزيع العمري/النوعي، مقارنة مصادر متعددة، ثم إعادة التشغيل خلال 1–2 أسبوع لمراقبة الاستمرارية."
+    : "Operational recommendation: validate ingestion quality (dates/scope), review age/sex stratification, compare multiple sources, then re-run within 1–2 weeks to assess persistence.";
+
+  const rationale = sigPack?.rationale
+    ? (isAR ? `مبرر الخوارزمية (Signature Insight): ${String(sigPack.rationale)}` : `Signature Insight rationale: ${String(sigPack.rationale)}`)
+    : null;
+
+  const narrative = sigPack?.narrative
+    ? (isAR ? `الخلاصة السردية: ${String(sigPack.narrative)}` : `Narrative summary: ${String(sigPack.narrative)}`)
+    : null;
+
+  return [intro, ensemble, driver, clinicalMeaning, recommended, rationale, narrative].filter(Boolean).join("\n\n");
+}
+
+/* =========================
    ✅ Page
    ========================= */
 export default function SurveillanceDashboard({ lang = "ar" }) {
@@ -698,10 +834,7 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
 
   const [scopeMode, setScopeMode] = useState("facility");
   const [facilityId, setFacilityId] = useState("AMM-NEWCAMP-01");
-
-  // ✅ كان AMMAN_SOUTH (غالبًا غير مطابق لبيانات Mongo عندك). خليناه فاضي لتجنب “تحليل منطقة لا يعمل”
-  const [regionId, setRegionId] = useState("");
-
+  const [regionId, setRegionId] = useState("AMMAN_SOUTH");
   const [labId, setLabId] = useState("");
 
   const [signal, setSignal] = useState("anemia");
@@ -791,6 +924,14 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
     if (!list?.length) return t.notAvailable;
     return list.map((x) => x.toUpperCase()).join(" + ");
   }
+function normalizeDateRange(startDate, endDate) {
+  const s = (startDate || "").trim();
+  const e = (endDate || "").trim();
+  if (!s || !e) return { start: s, end: e, swapped: false };
+  // صيغة input type="date" تكون YYYY-MM-DD، والمقارنة النصية هنا تعمل صح
+  if (s <= e) return { start: s, end: e, swapped: false };
+  return { start: e, end: s, swapped: true };
+}
 
   function buildScopeQuery() {
     const params = new URLSearchParams();
@@ -801,9 +942,11 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
     const lab = String(labId || "").trim();
     if (lab) params.set("labId", lab);
 
-    // time filter
-    if (startDate) params.set("startDate", startDate);
-    if (endDate) params.set("endDate", endDate);
+    // time filter (auto-fix reversed range)
+const norm = normalizeDateRange(startDate, endDate);
+if (norm.start) params.set("startDate", norm.start);
+if (norm.end) params.set("endDate", norm.end);
+
 
     // preset always sent (for reproducibility)
     if (preset) params.set("preset", preset);
@@ -837,24 +980,6 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
         : `${t.modeRegion}: ${regionId?.trim() || t.notAvailable}`;
     const lab = labId?.trim() ? ` • LAB: ${labId.trim()}` : "";
     return core + lab;
-  }
-
-  // ✅ Scope badge (Facility | Region) — UI-only, no dependency on other component
-  function renderScopeBadge() {
-    const isFacility = scopeMode === "facility";
-    const label = t.scopeBadgeLabel;
-    const typeText = isFacility ? t.facilityShort : t.regionShort;
-    const idText = isFacility ? (facilityId?.trim() || t.notAvailable) : (regionId?.trim() || t.notAvailable);
-    const cls = isFacility ? "scopeBadge scopeBadgeFacility" : "scopeBadge scopeBadgeRegion";
-
-    return (
-      <div className={cls} title={scopeLabel()}>
-        <span className="scopeBadgeKey">{label}:</span>
-        <span className="scopeBadgeVal">{typeText}</span>
-        <span style={{ opacity: 0.65 }}>•</span>
-        <span className="scopeBadgeVal">{idText}</span>
-      </div>
-    );
   }
 
   async function uploadCsv() {
@@ -1022,6 +1147,41 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
     preset === "high" ? t.presetHigh :
     t.presetStandard;
 
+  const infoText = useMemo(() => {
+    if (!runData) return "";
+    return buildInfoText({
+      lang,
+      scopeMode,
+      facilityId,
+      regionId,
+      labId,
+      presetLabel,
+      advanced,
+      methodsSelected: selectedMethods(),
+      decision,
+      counts,
+      dataRange,
+      dataQuality: runData?.meta?.dataQuality,
+      results: runData?.results,
+      lastUpdated: trustUpdated !== t.notAvailable ? trustUpdated : null,
+    });
+  }, [
+    runData, lang, scopeMode, facilityId, regionId, labId,
+    presetLabel, advanced, decision, counts, dataRange, trustUpdated
+  ]);
+
+  const interpretationText = useMemo(() => {
+    if (!runData) return "";
+    return buildInterpretationText({
+      lang,
+      sigPack,
+      decision,
+      counts,
+      methodsSelected: selectedMethods(),
+      results: runData?.results,
+    });
+  }, [runData, lang, sigPack, decision, counts]);
+
   return (
     <div className="dash" dir={isRTL ? "rtl" : "ltr"}>
       <style>{styles}</style>
@@ -1031,11 +1191,6 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
           <div>
             <div className="panelTitle">{t.title}</div>
             <div className="panelHint">{t.note}</div>
-          </div>
-
-          {/* ✅ Scope Badge in header */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: isRTL ? "flex-start" : "flex-end" }}>
-            {renderScopeBadge()}
           </div>
         </div>
 
@@ -1386,11 +1541,27 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
               </div>
             </div>
 
+            {/* ✅ NEW: INFO (auto-generated) */}
+            <div className="card">
+              <div className="cardHeader">
+                <div>
+                  <div className="cardTitle">{t.infoTitle}</div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>{t.infoHint}</div>
+                </div>
+              </div>
+              <div className="reportBox2" style={{ whiteSpace: "pre-wrap", lineHeight: 1.85, padding: 12, borderRadius: 12 }}>
+                {infoText || t.empty}
+              </div>
+            </div>
+
+            {/* ✅ UPGRADED: Interpretation (auto-generated, richer) */}
             <div className="card">
               <div className="cardHeader">
                 <div className="cardTitle">{t.interpretation}</div>
               </div>
-              <div className="muted">{sigPack?.narrative || t.empty}</div>
+              <div className="reportBox2" style={{ whiteSpace: "pre-wrap", lineHeight: 1.85, padding: 12, borderRadius: 12 }}>
+                {interpretationText || sigPack?.narrative || t.empty}
+              </div>
             </div>
 
             <div className="card">
