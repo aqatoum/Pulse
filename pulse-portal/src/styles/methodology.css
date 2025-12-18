@@ -1,0 +1,50 @@
+.meth{
+  position:relative;
+  z-index:2;
+  padding: 6px;
+}
+
+.methHeader{
+  padding: 14px 6px 10px;
+}
+
+.methTitle{
+  font-size:18px;
+  font-weight:1000;
+}
+
+.methSub{
+  margin-top:8px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.methCard{
+  margin-top:12px;
+  border:1px solid var(--stroke);
+  border-radius: var(--radius);
+  background: rgba(255,255,255,.04);
+  box-shadow: var(--shadow);
+  padding: 16px;
+}
+
+.methH{
+  font-weight: 1000;
+  margin-bottom: 10px;
+}
+
+.methList{
+  margin:0;
+  padding-inline-start: 18px;
+  line-height: 1.8;
+  color: rgba(255,255,255,.88);
+}
+
+.methNote{
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 16px;
+  border:1px solid rgba(47,125,255,.20);
+  background: rgba(47,125,255,.10);
+  color: rgba(255,255,255,.90);
+}
