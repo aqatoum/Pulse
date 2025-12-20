@@ -1,5 +1,17 @@
 {
-  "dependencies": {
-    "csv-parse": "^6.1.0"
+  "name": "pulse-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "concurrently -n API,PORTAL -c auto \"npm:dev:api\" \"npm:dev:portal\"",
+    "dev:api": "npm --prefix apps/pulse-api run dev",
+    "dev:portal": "npm --prefix apps/pulse-portal run dev",
+    "build": "npm run build:api && npm run build:portal",
+    "build:api": "npm --prefix apps/pulse-api run build",
+    "build:portal": "npm --prefix apps/pulse-portal run build",
+    "start": "npm --prefix apps/pulse-api run start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
   }
 }
