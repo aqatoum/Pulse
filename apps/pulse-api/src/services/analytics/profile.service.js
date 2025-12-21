@@ -56,6 +56,13 @@ function toHbValue(r) {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+// ✅ percent formatting helper (controls decimals)
+function pct(rate01, decimals = 1) {
+  if (typeof rate01 !== "number" || !Number.isFinite(rate01)) return null;
+  const p = rate01 * 100;
+  return Number(p.toFixed(decimals));
+}
+
 function buildInsight({ signalType, overall, byAge, bySex, byAgeSex, language = "en" }) {
   const sig = getSignal(signalType);
 
@@ -83,18 +90,20 @@ function buildInsight({ signalType, overall, byAge, bySex, byAgeSex, language = 
       ? { level: "medium", ar: "ثقة متوسطة", en: "Moderate confidence" }
       : { level: "low", ar: "ثقة منخفضة", en: "Low confidence" };
 
+  // ✅ choose how many decimals you want in narrative/key
+  const DECIMALS = 1; // change to 2 if you want 8.78%
+
   if (language === "ar") {
+    const topPct = top ? pct(top.lowRate, DECIMALS) : null;
+    const overallPct = totalRate !== null ? pct(totalRate, DECIMALS) : null;
+
     const topText = top
-      ? `أعلى نسبة كانت لدى (العمر ${top.ageBand}, الجنس ${top.sex}) بمعدل ${Math.round(
-          top.lowRate * 100
-        )}% من أصل ${top.n} فحص.`
+      ? `أعلى نسبة كانت لدى (العمر ${top.ageBand}, الجنس ${top.sex}) بمعدل ${topPct}% من أصل ${top.n} فحص.`
       : "لا توجد عينة كافية لاستخلاص مقارنة قوية بين الفئات (نحتاج عينات أكبر لكل فئة).";
 
     return {
       title: "تحليل الفئات الأكثر تأثرًا",
-      summary: `ملخص ${labelSignal}: تم تحليل ${totalN} فحصًا، وبلغ عدد الحالات منخفضة Hb ${totalLow} (معدل إجمالي ${
-        totalRate !== null ? Math.round(totalRate * 100) : "غير متاح"
-      }%).`,
+      summary: `ملخص ${labelSignal}: تم تحليل ${totalN} فحصًا، وبلغ عدد الحالات منخفضة Hb ${totalLow} (معدل إجمالي ${overallPct !== null ? overallPct : "غير متاح"}%).`,
       keyFinding: topText,
       confidenceLevel: confidence.level,
       confidenceLabel: confidence.ar,
@@ -107,17 +116,16 @@ function buildInsight({ signalType, overall, byAge, bySex, byAgeSex, language = 
     };
   }
 
+  const topPct = top ? pct(top.lowRate, DECIMALS) : null;
+  const overallPct = totalRate !== null ? pct(totalRate, DECIMALS) : null;
+
   const topText = top
-    ? `Highest rate observed in (age ${top.ageBand}, sex ${top.sex}) at ${Math.round(
-        top.lowRate * 100
-      )}% based on ${top.n} tests.`
+    ? `Highest rate observed in (age ${top.ageBand}, sex ${top.sex}) at ${topPct}% based on ${top.n} tests.`
     : "No subgroup has sufficient sample size to support a strong comparison yet (larger samples per subgroup are needed).";
 
   return {
     title: "Most Affected Subgroup Analysis",
-    summary: `Summary for ${labelSignal}: ${totalN} tests analyzed; ${totalLow} low-Hb cases (overall rate ${
-      totalRate !== null ? Math.round(totalRate * 100) : "N/A"
-    }%).`,
+    summary: `Summary for ${labelSignal}: ${totalN} tests analyzed; ${totalLow} low-Hb cases (overall rate ${overallPct !== null ? overallPct : "N/A"}%).`,
     keyFinding: topText,
     confidenceLevel: confidence.level,
     confidenceLabel: confidence.en,

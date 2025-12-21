@@ -330,6 +330,48 @@ function computeDataQuality({ profile, results }) {
 }
 
 /* ===============================
+   ✅ PROFILE — /api/analytics/anemia-profile
+   (هذا كان مفقود/مكسور بسبب تكرار router/module.exports)
+   =============================== */
+router.get("/anemia-profile", async (req, res) => {
+  try {
+    const scopeRes = getScope(req);
+    if (!scopeRes.ok) {
+      return res.status(400).json(apiError({ status: 400, error: scopeRes.error }));
+    }
+
+    const lang = normalizeLang(req.query.lang, "both");
+    const dateFilter = getDateRangeFilter(req);
+
+    const { rows, dateRange } = await loadAnemiaRows({ scope: scopeRes.scope, dateFilter });
+
+    const out = computeAnemiaProfile({ rows, lang }); // out: { profile, insight }
+    return res.json(
+      apiOk({
+        ...withScopeTop(scopeRes),
+        analysis: {
+          signalType: "anemia",
+          method: "PROFILE",
+          params: {
+            lang,
+            ...scopeRes.scope,
+          },
+          dateRange,
+        },
+        data: {
+          ...(out || {}),
+          dateRange,
+          meta: { overallN: out?.profile?.overall?.n ?? 0 },
+        },
+      })
+    );
+  } catch (err) {
+    console.error("PROFILE error:", err);
+    return res.status(500).json(apiError({ status: 500, error: "Server error", details: err.message }));
+  }
+});
+
+/* ===============================
    EWMA
    =============================== */
 router.get("/anemia-ewma", async (req, res) => {
@@ -558,7 +600,7 @@ router.get("/report", async (req, res) => {
     const dataQuality = computeDataQuality({ profile, results });
 
     const built = buildReport({
-      facilityId: scopeRes.scope.scopeId, // (مسمى قديم داخل report.service)
+      facilityId: scopeRes.scope.scopeId,
       signalType: "anemia",
       methods,
       consensus,

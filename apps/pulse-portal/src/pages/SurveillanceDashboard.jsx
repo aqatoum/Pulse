@@ -112,6 +112,16 @@ const TXT = {
     advancedActive: "متقدمة",
     yes: "نعم",
     no: "لا",
+
+    // ✅ Strat table labels
+    overall: "الإجمالي",
+    byAge: "حسب العمر",
+    bySex: "حسب الجنس",
+    ageBand: "الفئة العمرية",
+    sex: "الجنس",
+    n: "N",
+    low: "Low",
+    lowRate: "Low rate",
   },
   en: {
     title: "Epidemiological Surveillance Dashboard",
@@ -220,6 +230,16 @@ const TXT = {
     advancedActive: "Advanced",
     yes: "Yes",
     no: "No",
+
+    // ✅ Strat table labels
+    overall: "Overall",
+    byAge: "By age",
+    bySex: "By sex",
+    ageBand: "Age band",
+    sex: "Sex",
+    n: "N",
+    low: "Low",
+    lowRate: "Low rate",
   },
 };
 
@@ -403,6 +423,17 @@ const styles = `
   .ddItem:hover{ background: rgba(255,255,255,0.10); }
   .ddItemActive{ background: rgba(255,255,255,0.14); outline: 1px solid rgba(255,255,255,0.12); }
 
+  /* ✅ Strat tables */
+  .stratGrid{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; margin-top: 10px; }
+  .stratBox{ border-radius: 14px; padding: 12px; background: rgba(0,0,0,0.18); border: 1px solid rgba(255,255,255,0.10); }
+  .stratTitle{ font-weight: 950; margin-bottom: 8px; font-size: 13px; opacity: .95; }
+  .stratTable{ width:100%; border-collapse: collapse; font-size: 12px; }
+  .stratTable th, .stratTable td{ padding: 8px 6px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .stratTable th{ opacity: .75; font-weight: 900; text-align: start; }
+  .stratTable td{ opacity: .92; font-weight: 700; }
+  .numCell{ text-align: end; font-variant-numeric: tabular-nums; }
+  .subtle{ opacity:.8; font-size: 12px; line-height: 1.6; }
+
   @media (max-width: 980px){
     .advGrid{ grid-template-columns: 1fr; }
   }
@@ -414,6 +445,7 @@ const styles = `
     .actions{ justify-content: stretch; }
     .primaryBtn,.ghostBtn,.dangerBtn{ width:100%; }
     .miniVal{ text-align: start; }
+    .stratGrid{ grid-template-columns: 1fr; }
   }
 `;
 
@@ -478,9 +510,50 @@ function toNum(v) {
   const x = typeof v === "number" ? v : Number(v);
   return Number.isFinite(x) ? x : null;
 }
-
 function joinNonEmpty(parts, sep = " • ") {
   return (parts || []).filter(Boolean).join(sep);
+}
+
+/* ✅ Clean date/time formatting */
+function formatDateTime(value, lang = "en") {
+  if (!value) return "";
+  const locale = lang === "ar" ? "ar-JO" : "en-US";
+  const d = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(d.getTime())) {
+    return String(value).replace("T", " ").replace("Z", "").trim();
+  }
+  const datePart = new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+
+  const timePart = new Intl.DateTimeFormat(locale, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+
+  return `${datePart} ${timePart}`;
+}
+
+function formatDateOnly(value, lang = "en") {
+  if (!value) return "";
+  const locale = lang === "ar" ? "ar-JO" : "en-US";
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const d = new Date(String(value));
+  if (Number.isNaN(d.getTime())) return String(value).trim();
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+function formatRangeLabel(start, end, lang = "en") {
+  const s = start ? formatDateOnly(start, lang) : "…";
+  const e = end ? formatDateOnly(end, lang) : "…";
+  return `${s} → ${e}`;
 }
 
 /* =========================
@@ -538,7 +611,13 @@ function adaptFarrington(payload) {
   const series = (pts || [])
     .map((p) => ({
       label: p.week || p.label || "",
-      value: toNum(p.z) ?? toNum(p.score) ?? toNum(p.value) ?? toNum(p.obs) ?? toNum(p.observed) ?? toNum(p.low),
+      value:
+        toNum(p.z) ??
+        toNum(p.score) ??
+        toNum(p.value) ??
+        toNum(p.obs) ??
+        toNum(p.observed) ??
+        toNum(p.low),
       alert: !!(p.alert || p.isAlert),
     }))
     .filter((p) => p.value !== null);
@@ -668,9 +747,15 @@ function detectTriggerMethods(results) {
   const out = [];
   if (!results) return out;
 
-  const ewLast = Array.isArray(results?.ewma?.points) ? results.ewma.points[results.ewma.points.length - 1] : null;
-  const cuLast = Array.isArray(results?.cusum?.points) ? results.cusum.points[results.cusum.points.length - 1] : null;
-  const faLast = Array.isArray(results?.farrington?.points) ? results.farrington.points[results.farrington.points.length - 1] : null;
+  const ewLast = Array.isArray(results?.ewma?.points)
+    ? results.ewma.points[results.ewma.points.length - 1]
+    : null;
+  const cuLast = Array.isArray(results?.cusum?.points)
+    ? results.cusum.points[results.cusum.points.length - 1]
+    : null;
+  const faLast = Array.isArray(results?.farrington?.points)
+    ? results.farrington.points[results.farrington.points.length - 1]
+    : null;
 
   if (ewLast?.alert) out.push("EWMA");
   if (cuLast?.alert) out.push("CUSUM");
@@ -821,6 +906,141 @@ function buildInterpretationText({
 }
 
 /* =========================
+   ✅ Strat view
+   ========================= */
+function StratificationPanel({ t, lang, profileData, fallbackInsight }) {
+  const profile = profileData?.profile || profileData || null;
+  if (!profile) return <div className="muted">{t.empty}</div>;
+
+  const overall = profile?.overall || null;
+  const byAge = Array.isArray(profile?.byAge) ? profile.byAge : [];
+  const bySex = Array.isArray(profile?.bySex) ? profile.bySex : [];
+
+  function fmtRate(x, decimals = 2) {
+  if (x === null || x === undefined) return "—";
+  const n = Number(x);
+  if (!Number.isFinite(n)) return "—";
+  return (n * 100).toFixed(decimals) + "%";
+}
+
+  // ✅ NEW helpers for Key text
+  function fmtPctFromRate(rate, digits = 1) {
+    if (rate === null || rate === undefined) return "—";
+    const n = Number(rate);
+    if (!Number.isFinite(n)) return "—";
+    return `${(n * 100).toFixed(digits)}%`;
+  }
+
+  // ✅ NEW Key builder (byAgeSex)
+  function buildKeyFindingFromData() {
+    const groups = Array.isArray(profile?.byAgeSex) ? profile.byAgeSex : [];
+    const MIN_N = 10;
+
+    const top = groups
+      .filter((g) => (g?.n ?? 0) >= MIN_N && typeof g?.lowRate === "number")
+      .sort((a, b) => (b.lowRate - a.lowRate))[0];
+
+    if (!top) return safeText(fallbackInsight?.keyFinding) || "—";
+
+    const rateTxt = fmtPctFromRate(top.lowRate, 1);
+
+    if (lang === "ar") {
+      return `أعلى نسبة كانت لدى (العمر ${top.ageBand}, الجنس ${top.sex}) بمعدل ${rateTxt} من أصل ${top.n} فحص.`;
+    }
+    return `Highest rate observed in (age ${top.ageBand}, sex ${top.sex}) at ${rateTxt} based on ${top.n} tests.`;
+  }
+
+  return (
+    <div className="stratGrid">
+      {/* ✅ Overall */}
+      <div className="stratBox">
+        <div className="stratTitle">{t.overall}</div>
+        {overall ? (
+          <table className="stratTable">
+            <thead>
+              <tr>
+                <th>{t.n}</th>
+                <th>{t.low}</th>
+                <th className="numCell">{t.lowRate}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>{overall.n ?? "—"}</td>
+                <td>{overall.low ?? "—"}</td>
+                <td className="numCell">{fmtRate(overall.lowRate)}</td>
+              </tr>
+            </tbody>
+          </table>
+        ) : (
+          <div className="subtle">{t.empty}</div>
+        )}
+      </div>
+
+      {/* ✅ By Sex */}
+      <div className="stratBox">
+        <div className="stratTitle">{t.bySex}</div>
+        {bySex.length ? (
+          <table className="stratTable">
+            <thead>
+              <tr>
+                <th>{t.sex}</th>
+                <th>{t.n}</th>
+                <th className="numCell">{t.lowRate}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bySex.map((r, idx) => (
+                <tr key={idx}>
+                  <td>{r.sex ?? "—"}</td>
+                  <td>{r.n ?? "—"}</td>
+                  <td className="numCell">{fmtRate(r.lowRate)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="subtle">{t.empty}</div>
+        )}
+      </div>
+
+      {/* ✅ By Age */}
+      <div className="stratBox" style={{ gridColumn: "1 / -1" }}>
+        <div className="stratTitle">{t.byAge}</div>
+        {byAge.length ? (
+          <table className="stratTable">
+            <thead>
+              <tr>
+                <th>{t.ageBand}</th>
+                <th>{t.n}</th>
+                <th className="numCell">{t.lowRate}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byAge.map((r, idx) => (
+                <tr key={idx}>
+                  <td>{r.ageBand ?? "—"}</td>
+                  <td>{r.n ?? "—"}</td>
+                  <td className="numCell">{fmtRate(r.lowRate)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="subtle">{t.empty}</div>
+        )}
+      </div>
+
+      {/* ✅ Key finding block below tables (optional) */}
+      <div className="stratBox" style={{ gridColumn: "1 / -1" }}>
+        <div className="stratTitle">{lang === "ar" ? "Key" : "Key"}</div>
+        <div className="muted">{buildKeyFindingFromData()}</div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================
    ✅ Page
    ========================= */
 export default function SurveillanceDashboard({ lang = "ar" }) {
@@ -860,7 +1080,6 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
   const [farringtonBaselineWeeks, setFarringtonBaselineWeeks] = useState(PRESETS.standard.farrington.baselineWeeks);
   const [farringtonZ, setFarringtonZ] = useState(PRESETS.standard.farrington.z);
 
-  // Sync sliders to preset when advanced is OFF OR when user presses reset
   useEffect(() => {
     if (advanced) return;
     const p = PRESETS[preset] || PRESETS.standard;
@@ -924,14 +1143,14 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
     if (!list?.length) return t.notAvailable;
     return list.map((x) => x.toUpperCase()).join(" + ");
   }
-function normalizeDateRange(startDate, endDate) {
-  const s = (startDate || "").trim();
-  const e = (endDate || "").trim();
-  if (!s || !e) return { start: s, end: e, swapped: false };
-  // صيغة input type="date" تكون YYYY-MM-DD، والمقارنة النصية هنا تعمل صح
-  if (s <= e) return { start: s, end: e, swapped: false };
-  return { start: e, end: s, swapped: true };
-}
+
+  function normalizeDateRange(startDate, endDate) {
+    const s = (startDate || "").trim();
+    const e = (endDate || "").trim();
+    if (!s || !e) return { start: s, end: e, swapped: false };
+    if (s <= e) return { start: s, end: e, swapped: false };
+    return { start: e, end: s, swapped: true };
+  }
 
   function buildScopeQuery() {
     const params = new URLSearchParams();
@@ -942,30 +1161,23 @@ function normalizeDateRange(startDate, endDate) {
     const lab = String(labId || "").trim();
     if (lab) params.set("labId", lab);
 
-    // time filter (auto-fix reversed range)
-const norm = normalizeDateRange(startDate, endDate);
-if (norm.start) params.set("startDate", norm.start);
-if (norm.end) params.set("endDate", norm.end);
+    const norm = normalizeDateRange(startDate, endDate);
+    if (norm.start) params.set("startDate", norm.start);
+    if (norm.end) params.set("endDate", norm.end);
 
-
-    // preset always sent (for reproducibility)
     if (preset) params.set("preset", preset);
 
-    // advanced tuning
     if (advanced) {
       params.set("advanced", "1");
 
-      // EWMA
       params.set("ewmaLambda", String(clampNum(ewmaLambda, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max)));
       params.set("ewmaL", String(clampNum(ewmaL, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max)));
       params.set("ewmaBaselineN", String(clampInt(ewmaBaselineN, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max)));
 
-      // CUSUM
       params.set("cusumBaselineN", String(clampInt(cusumBaselineN, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max)));
       params.set("cusumK", String(clampNum(cusumK, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max)));
       params.set("cusumH", String(clampNum(cusumH, BOUNDS.cusum.h.min, BOUNDS.cusum.h.max)));
 
-      // Farrington
       params.set("farringtonBaselineWeeks", String(clampInt(farringtonBaselineWeeks, BOUNDS.farrington.baselineWeeks.min, BOUNDS.farrington.baselineWeeks.max)));
       params.set("farringtonZ", String(clampNum(farringtonZ, BOUNDS.farrington.z.min, BOUNDS.farrington.z.max)));
     }
@@ -978,7 +1190,10 @@ if (norm.end) params.set("endDate", norm.end);
       scopeMode === "facility"
         ? `${t.modeFacility}: ${facilityId?.trim() || t.notAvailable}`
         : `${t.modeRegion}: ${regionId?.trim() || t.notAvailable}`;
-    const lab = labId?.trim() ? ` • LAB: ${labId.trim()}` : "";
+
+    const lab = labId?.trim()
+      ? (lang === "ar" ? ` • المختبر: ${labId.trim()}` : ` • Lab: ${labId.trim()}`)
+      : "";
     return core + lab;
   }
 
@@ -1042,7 +1257,7 @@ if (norm.end) params.set("endDate", norm.end);
       const dr1 = extractDateRange(runJ);
       if (dr1) setDataRange(dr1);
 
-      // 2) Charts per method (same params)
+      // 2) Charts per method
       const chartParams = new URLSearchParams(scopeParams);
       chartParams.set("lang", "en");
 
@@ -1128,10 +1343,17 @@ if (norm.end) params.set("endDate", norm.end);
 
   const profInsight = profileData?.insight;
 
-  const trustUpdated = lastUpdated ? safeText(lastUpdated) : t.notAvailable;
+  const trustUpdatedRaw = lastUpdated ? safeText(lastUpdated) : "";
+  const trustUpdated = trustUpdatedRaw ? formatDateTime(trustUpdatedRaw, lang) : t.notAvailable;
 
-  const requested = (startDate || endDate) ? `${startDate || "…"} → ${endDate || "…"}` : t.notAvailable;
-  const effective = (dataRange?.start || dataRange?.end) ? `${dataRange?.start || "…"} → ${dataRange?.end || "…"}` : t.notAvailable;
+  const normReq = normalizeDateRange(startDate, endDate);
+  const requested = (normReq.start || normReq.end)
+    ? formatRangeLabel(normReq.start, normReq.end, lang)
+    : t.notAvailable;
+
+  const effective = (dataRange?.start || dataRange?.end)
+    ? formatRangeLabel(dataRange?.start, dataRange?.end, lang)
+    : t.notAvailable;
 
   const trustAgg = "WEEKLY";
   const trustMethods = methodsLabel(selectedMethods());
@@ -1541,7 +1763,7 @@ if (norm.end) params.set("endDate", norm.end);
               </div>
             </div>
 
-            {/* ✅ NEW: INFO (auto-generated) */}
+            {/* INFO */}
             <div className="card">
               <div className="cardHeader">
                 <div>
@@ -1554,7 +1776,7 @@ if (norm.end) params.set("endDate", norm.end);
               </div>
             </div>
 
-            {/* ✅ UPGRADED: Interpretation (auto-generated, richer) */}
+            {/* Interpretation */}
             <div className="card">
               <div className="cardHeader">
                 <div className="cardTitle">{t.interpretation}</div>
@@ -1564,21 +1786,28 @@ if (norm.end) params.set("endDate", norm.end);
               </div>
             </div>
 
+            {/* ✅ Population Stratification */}
             <div className="card">
               <div className="cardHeader">
                 <div className="cardTitle">{t.strat}</div>
               </div>
+
               {profInsight ? (
                 <div className="callout calloutSoft">
                   <div style={{ fontWeight: 900 }}>{safeText(profInsight.title)}</div>
                   <div className="muted">{safeText(profInsight.summary)}</div>
-                  <div style={{ marginTop: 8 }}>
-                    <b>Key:</b> {safeText(profInsight.keyFinding)}
-                  </div>
+                  {/* ✅ لا نستخدم keyFinding الخام هنا لأن الباك كان يقرّبها */}
                 </div>
-              ) : (
-                <div className="muted">{t.empty}</div>
-              )}
+              ) : null}
+
+              <div style={{ marginTop: 10 }}>
+                <StratificationPanel
+                  t={t}
+                  lang={lang}
+                  profileData={profileData}
+                  fallbackInsight={profInsight}
+                />
+              </div>
             </div>
 
             {/* Charts */}
