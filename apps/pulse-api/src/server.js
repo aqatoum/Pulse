@@ -20,11 +20,12 @@ const MONGODB_URI = process.env.MONGODB_URI;
 app.use(express.json({ limit: "2mb" }));
 
 /* =========================
-   ✅ CORS (local portal + predictable)
+   ✅ CORS (local + production via env)
    ========================= */
 const allowedOrigins = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
+  ...(process.env.WEB_ORIGINS ? process.env.WEB_ORIGINS.split(",").map(s => s.trim()).filter(Boolean) : []),
 ];
 
 app.use(
