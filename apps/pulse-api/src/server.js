@@ -25,7 +25,9 @@ app.use(express.json({ limit: "2mb" }));
 const allowedOrigins = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
-  ...(process.env.WEB_ORIGINS ? process.env.WEB_ORIGINS.split(",").map(s => s.trim()).filter(Boolean) : []),
+  ...(process.env.WEB_ORIGINS
+    ? process.env.WEB_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean)
+    : []),
 ];
 
 app.use(
@@ -71,12 +73,58 @@ function healthPayload() {
 app.get("/health", (req, res) => res.json(healthPayload()));
 app.get("/api/health", (req, res) => res.json(healthPayload()));
 
+app.get("/", (req, res) => {
+  res.json({
+    ...healthPayload(),
+    message: "Welcome to PULSE API. Use /api/health for status.",
+  });
+});
+
 /* =========================
    ✅ API routes
    ========================= */
 app.use("/api/ingest", ingestRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/upload", uploadRoutes);
+
+/* =========================
+   ✅ DEBUG: print routes snapshot once at startup
+   ========================= */
+function listRoutes(appInstance) {
+  try {
+    const out = [];
+    const stack = appInstance?._router?.stack || [];
+
+    for (const layer of stack) {
+      // direct routes
+      if (layer?.route?.path) {
+        const methods = Object.keys(layer.route.methods || {})
+          .map((m) => m.toUpperCase())
+          .join(",");
+        out.push(`${methods} ${layer.route.path}`);
+        continue;
+      }
+
+      // mounted routers
+      if (layer?.name === "router" && layer?.handle?.stack) {
+        for (const h of layer.handle.stack) {
+          if (h?.route?.path) {
+            const methods = Object.keys(h.route.methods || {})
+              .map((m) => m.toUpperCase())
+              .join(",");
+            out.push(`${methods} (mounted) ${h.route.path}`);
+          }
+        }
+      }
+    }
+
+    console.log("=== ROUTES SNAPSHOT (first 200) ===");
+    out.slice(0, 200).forEach((r) => console.log(r));
+    console.log("===================================");
+  } catch (e) {
+    console.log("Routes snapshot failed:", e?.message || e);
+  }
+}
 
 /* =========================
    ✅ 404 (JSON, Codex-friendly)
@@ -87,8 +135,7 @@ app.use((req, res) => {
     error: "Not Found",
     path: req.originalUrl,
     method: req.method,
-    hint:
-      "Check route mount points in server.js and the route path inside the router file.",
+    hint: "Check route mount points in server.js and the route path inside the router file.",
     known: healthPayload().endpoints,
   });
 });
@@ -114,6 +161,9 @@ async function startServer() {
 
     await mongoose.connect(MONGODB_URI);
     console.log("MongoDB connected");
+
+    // Print routes after mounting
+    listRoutes(app);
 
     app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);

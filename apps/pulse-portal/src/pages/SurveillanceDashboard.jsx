@@ -9,18 +9,34 @@ const TXT = {
   ar: {
     title: "لوحة المراقبة الوبائية",
     note: "نصيحة: استخدام أكثر من طريقة يعطي قرارًا أقوى. الحساسية الأعلى قد تلتقط تغيرات أسرع لكنها قد تزيد الإنذارات الكاذبة.",
+
     scope: "نطاق التحليل",
+    modeGlobal: "وطني (كل البيانات)",
     modeFacility: "مرفق صحي",
     modeRegion: "منطقة",
     facility: "رمز المرفق",
     region: "رمز المنطقة",
     lab: "رمز المختبر (اختياري)",
-    placeholderFacility: "مثال: AMM-NEWCAMP-01",
-    placeholderRegion: "مثال: AMMAN_SOUTH",
+    placeholderFacility: "مثال: AMM-NEWCAMP-01 (اختياري)",
+    placeholderRegion: "مثال: AMMAN_SOUTH (اختياري)",
     placeholderLab: "مثال: LAB-01",
 
+    test: "الفحص",
+    hb: "Hb (فقر دم)",
+    wbc: "WBC (كريات بيضاء)",
+    crp: "CRP (التهاب)",
+    plt: "PLT (صفائح)",
+
     signal: "الإشارة",
-    anemia: "فقر الدم (Anemia)",
+    signalHint: "الإشارة تُحدد تلقائيًا بناءً على الفحص المختار. (مثال: Hb ⇢ Anemia).",
+
+    sigAnemia: "Anemia (Low Hb rate)",
+    sigWbc: "WBC deviation (High WBC rate)",
+    sigCrp: "Inflammation (High CRP rate)",
+    sigPlt: "Platelets deviation (Low PLT rate)",
+
+    analysisNoteTitle: "ملاحظة",
+    analysisNoteBody: "سيتم تطبيق التحليل على الإشارة المختارة أعلاه.",
 
     methods: "الطرق الإحصائية",
     run: "تشغيل التحليل",
@@ -29,14 +45,12 @@ const TXT = {
 
     dataset: "مصدر البيانات",
     aggregation: "التجميع",
-    timeRange: "النطاق الزمني",
     timeFilter: "فلتر الزمن",
     startDate: "بداية",
     endDate: "نهاية",
     clearDates: "مسح التواريخ",
 
     sensitivity: "الحساسية",
-    preset: "Preset",
     presetLow: "منخفضة",
     presetStandard: "قياسية",
     presetHigh: "عالية",
@@ -60,20 +74,13 @@ const TXT = {
     paramZ: "z (Farrington)",
     resetToPreset: "إعادة ضبط لقيم الـ Preset",
 
-    hintLambda:
-      "Lambda أعلى = استجابة أسرع للتغيرات الحديثة (حساسية أعلى). أقل = سلاسة أكثر (حساسية أقل).",
-    hintL:
-      "L أكبر = حد أعلى أعلى (أقل حساسية). L أصغر = حد أقل (أكثر حساسية).",
-    hintBaselineN:
-      "Baseline أكبر = مرجع تاريخي أوسع (استقرار أعلى). أصغر = مرجع أقل (قد يزيد التذبذب).",
-    hintK:
-      "k أصغر = حساسية أكبر لتغيرات صغيرة. k أكبر = يتطلب تغير أكبر ليبدأ التراكم.",
-    hintH:
-      "h أصغر = إنذار أسرع (حساسية أعلى). h أكبر = يتطلب تراكم أكبر.",
-    hintFarrBaseline:
-      "BaselineWeeks أكبر = مقارنة مع تاريخ أطول. أصغر = استجابة أسرع لكن أقل ثباتًا.",
-    hintZ:
-      "z أصغر = حد أقل (حساسية أعلى). z أكبر = حد أعلى (حساسية أقل).",
+    hintLambda: "Lambda أعلى = استجابة أسرع للتغيرات الحديثة (حساسية أعلى). أقل = سلاسة أكثر (حساسية أقل).",
+    hintL: "L أكبر = حد أعلى أعلى (أقل حساسية). L أصغر = حد أقل (أكثر حساسية).",
+    hintBaselineN: "Baseline أكبر = مرجع تاريخي أوسع (استقرار أعلى). أصغر = مرجع أقل (قد يزيد التذبذب).",
+    hintK: "k أصغر = حساسية أكبر لتغيرات صغيرة. k أكبر = يتطلب تغير أكبر ليبدأ التراكم.",
+    hintH: "h أصغر = إنذار أسرع (حساسية أعلى). h أكبر = يتطلب تراكم أكبر.",
+    hintFarrBaseline: "BaselineWeeks أكبر = مقارنة مع تاريخ أطول. أصغر = استجابة أسرع لكن أقل ثباتًا.",
+    hintZ: "z أصغر = حد أقل (حساسية أعلى). z أكبر = حد أعلى (حساسية أقل).",
 
     methodsUsed: "الطرق المستخدمة",
     lastUpdated: "آخر تحديث",
@@ -105,40 +112,54 @@ const TXT = {
     chartsHint:
       "الفكرة ببساطة: الخط يمثل تغير المؤشر عبر الزمن. الخط المتقطع هو الحد الذي عند تجاوزه تصبح الإشارة غير معتادة إحصائيًا. الدائرة الفارغة تعني نقطة إنذار.",
 
-    activeFilter: "الفلتر النشط",
-    requestedRange: "المدخل",
-    effectiveRange: "المتوفر",
     presetActive: "Preset الحالي",
     advancedActive: "متقدمة",
     yes: "نعم",
     no: "لا",
 
-    // ✅ Strat table labels
-    overall: "الإجمالي",
-    byAge: "حسب العمر",
+    requiredFacility: "الرجاء إدخال رمز المرفق عند اختيار (مرفق صحي).",
+    requiredRegion: "الرجاء إدخال رمز المنطقة عند اختيار (منطقة).",
+
+    // ✅ strat labels
+    totalSamples: "إجمالي العينات",
+    signalRate: "معدل الإشارة",
     bySex: "حسب الجنس",
-    ageBand: "الفئة العمرية",
-    sex: "الجنس",
-    n: "N",
-    low: "Low",
-    lowRate: "Low rate",
+    byAge: "حسب العمر",
+    byNationality: "حسب الجنسية",
   },
+
   en: {
     title: "Epidemiological Surveillance Dashboard",
     note:
       "Tip: using multiple methods strengthens the final decision. Higher sensitivity may detect changes earlier but can increase false alerts.",
+
     scope: "Scope",
+    modeGlobal: "Global (all data)",
     modeFacility: "Facility",
     modeRegion: "Region",
     facility: "Facility code",
     region: "Region code",
     lab: "Lab code (optional)",
-    placeholderFacility: "e.g., AMM-NEWCAMP-01",
-    placeholderRegion: "e.g., AMMAN_SOUTH",
+    placeholderFacility: "e.g., AMM-NEWCAMP-01 (optional)",
+    placeholderRegion: "e.g., AMMAN_SOUTH (optional)",
     placeholderLab: "e.g., LAB-01",
 
+    test: "Test",
+    hb: "Hb (Anemia)",
+    wbc: "WBC (White Blood Cells)",
+    crp: "CRP (Inflammation)",
+    plt: "PLT (Platelets)",
+
     signal: "Signal",
-    anemia: "Anemia",
+    signalHint: "Signal is auto-selected based on the chosen test (e.g., Hb ⇢ Anemia).",
+
+    sigAnemia: "Anemia (Low Hb rate)",
+    sigWbc: "WBC deviation (High WBC rate)",
+    sigCrp: "Inflammation (High CRP rate)",
+    sigPlt: "Platelets deviation (Low PLT rate)",
+
+    analysisNoteTitle: "Note",
+    analysisNoteBody: "Analysis will run on the selected signal above.",
 
     methods: "Statistical methods",
     run: "Run analysis",
@@ -147,14 +168,12 @@ const TXT = {
 
     dataset: "Dataset",
     aggregation: "Aggregation",
-    timeRange: "Time range",
     timeFilter: "Time filter",
     startDate: "Start",
     endDate: "End",
     clearDates: "Clear dates",
 
     sensitivity: "Sensitivity",
-    preset: "Preset",
     presetLow: "Low",
     presetStandard: "Standard",
     presetHigh: "High",
@@ -163,8 +182,7 @@ const TXT = {
     advanced: "Advanced settings",
     advancedOn: "Enable advanced",
     advancedOff: "Disable advanced (use preset)",
-    advancedHint:
-      "Advanced lets you tune each method’s sensitivity. Values are clamped to safe bounds.",
+    advancedHint: "Advanced lets you tune each method’s sensitivity. Values are clamped to safe bounds.",
     ewmaBlock: "EWMA",
     cusumBlock: "CUSUM",
     farringtonBlock: "Farrington",
@@ -223,25 +241,56 @@ const TXT = {
     chartsHint:
       "Simply: the line shows how the indicator changes over time. The dashed line is the statistical threshold. Hollow circles mark alert points.",
 
-    activeFilter: "Active filter",
-    requestedRange: "Requested",
-    effectiveRange: "Available",
     presetActive: "Current preset",
     advancedActive: "Advanced",
     yes: "Yes",
     no: "No",
 
-    // ✅ Strat table labels
-    overall: "Overall",
-    byAge: "By age",
+    requiredFacility: "Please enter a facility code when Scope=Facility.",
+    requiredRegion: "Please enter a region code when Scope=Region.",
+
+    // ✅ strat labels
+    totalSamples: "Total samples",
+    signalRate: "Signal rate",
     bySex: "By sex",
-    ageBand: "Age band",
-    sex: "Sex",
-    n: "N",
-    low: "Low",
-    lowRate: "Low rate",
+    byAge: "By age",
+    byNationality: "By nationality",
   },
 };
+
+/* =========================
+   ✅ Options
+   ========================= */
+function getScopeOptions(t) {
+  return [
+    { value: "global", label: t.modeGlobal },
+    { value: "facility", label: t.modeFacility },
+    { value: "region", label: t.modeRegion },
+  ];
+}
+
+function getTestOptions(t) {
+  return [
+    { value: "HB", label: t.hb },
+    { value: "WBC", label: t.wbc },
+    { value: "CRP", label: t.crp },
+    { value: "PLT", label: t.plt },
+  ];
+}
+
+function getSignalForTest(testCode) {
+  if (testCode === "WBC") return "wbc";
+  if (testCode === "CRP") return "crp";
+  if (testCode === "PLT") return "plt";
+  return "anemia";
+}
+
+function getSignalLabel(t, derivedSignal) {
+  if (derivedSignal === "wbc") return t.sigWbc;
+  if (derivedSignal === "crp") return t.sigCrp;
+  if (derivedSignal === "plt") return t.sigPlt;
+  return t.sigAnemia;
+}
 
 /* =========================
    ✅ Presets + Bounds (UI mirror of API)
@@ -344,11 +393,8 @@ const styles = `
   .statLbl{ opacity: .75; font-size: 12px; margin-top: 4px; }
 
   .muted{ opacity:.85; font-size: 13px; line-height: 1.7; }
-  .callout{ border-radius: 14px; padding: 12px; border: 1px solid rgba(255,255,255,0.12); }
-  .calloutSoft{ background: rgba(255,255,255,0.05); }
   .reportBox2{ background: rgba(0,0,0,0.20); border: 1px solid rgba(255,255,255,0.12); color: rgba(255,255,255,0.94); }
 
-  /* ✅ Advanced Panel */
   .advWrap{
     border-radius: 14px;
     padding: 12px;
@@ -372,6 +418,7 @@ const styles = `
   .paramVal{ font-weight: 950; font-size: 12px; opacity: 0.95; }
   .paramHint{ font-size: 12px; opacity: 0.78; line-height: 1.5; }
   .rangeInput{ width:100%; }
+
   .tinyPill{
     display:inline-flex; align-items:center; gap:6px;
     border-radius: 999px;
@@ -382,7 +429,6 @@ const styles = `
     font-size: 12px;
   }
 
-  /* ✅ Dropdown */
   .dd{ position: relative; }
   .ddBtn{
     width: 100%; border-radius: 12px;
@@ -423,21 +469,6 @@ const styles = `
   .ddItem:hover{ background: rgba(255,255,255,0.10); }
   .ddItemActive{ background: rgba(255,255,255,0.14); outline: 1px solid rgba(255,255,255,0.12); }
 
-  /* ✅ Strat tables */
-  .stratGrid{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; margin-top: 10px; }
-  .stratBox{ border-radius: 14px; padding: 12px; background: rgba(0,0,0,0.18); border: 1px solid rgba(255,255,255,0.10); }
-  .stratTitle{ font-weight: 950; margin-bottom: 8px; font-size: 13px; opacity: .95; }
-  .stratTable{ width:100%; border-collapse: collapse; font-size: 12px; }
-  .stratTable th, .stratTable td{ padding: 8px 6px; border-bottom: 1px solid rgba(255,255,255,0.08); }
-  .stratTable th{ opacity: .75; font-weight: 900; text-align: start; }
-  .stratTable td{ opacity: .92; font-weight: 700; }
-  .numCell{ text-align: end; font-variant-numeric: tabular-nums; }
-  .subtle{ opacity:.8; font-size: 12px; line-height: 1.6; }
-
-  @media (max-width: 980px){
-    .advGrid{ grid-template-columns: 1fr; }
-  }
-
   @media (max-width: 860px){
     .formRow{ grid-template-columns: 1fr; }
     .grid{ grid-template-columns: 1fr; }
@@ -445,7 +476,7 @@ const styles = `
     .actions{ justify-content: stretch; }
     .primaryBtn,.ghostBtn,.dangerBtn{ width:100%; }
     .miniVal{ text-align: start; }
-    .stratGrid{ grid-template-columns: 1fr; }
+    .advGrid{ grid-template-columns: 1fr; }
   }
 `;
 
@@ -468,6 +499,16 @@ function clampInt(x, min, max) {
   const v = parseInt(String(x), 10);
   if (!Number.isFinite(v)) return min;
   return Math.max(min, Math.min(max, v));
+}
+function toNum(v) {
+  const x = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(x) ? x : null;
+}
+function fmtPct(x) {
+  if (x === null || x === undefined) return "—";
+  const n = Number(x);
+  if (!Number.isFinite(n)) return "—";
+  return `${Math.round(n * 100)}%`;
 }
 function extractDateRange(j) {
   const dr = j?.analysis?.dateRange || j?.data?.dateRange || j?.dateRange || null;
@@ -506,54 +547,12 @@ async function postFile(url, file) {
   }
   return j;
 }
-function toNum(v) {
-  const x = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(x) ? x : null;
-}
-function joinNonEmpty(parts, sep = " • ") {
-  return (parts || []).filter(Boolean).join(sep);
-}
-
-/* ✅ Clean date/time formatting */
-function formatDateTime(value, lang = "en") {
-  if (!value) return "";
-  const locale = lang === "ar" ? "ar-JO" : "en-US";
-  const d = value instanceof Date ? value : new Date(String(value));
-  if (Number.isNaN(d.getTime())) {
-    return String(value).replace("T", " ").replace("Z", "").trim();
-  }
-  const datePart = new Intl.DateTimeFormat(locale, {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d);
-
-  const timePart = new Intl.DateTimeFormat(locale, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(d);
-
-  return `${datePart} ${timePart}`;
-}
-
-function formatDateOnly(value, lang = "en") {
-  if (!value) return "";
-  const locale = lang === "ar" ? "ar-JO" : "en-US";
-  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-  const d = new Date(String(value));
-  if (Number.isNaN(d.getTime())) return String(value).trim();
-  return new Intl.DateTimeFormat(locale, {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d);
-}
-
-function formatRangeLabel(start, end, lang = "en") {
-  const s = start ? formatDateOnly(start, lang) : "…";
-  const e = end ? formatDateOnly(end, lang) : "…";
-  return `${s} → ${e}`;
+function normalizeDateRange(startDate, endDate) {
+  const s = (startDate || "").trim();
+  const e = (endDate || "").trim();
+  if (!s || !e) return { start: s, end: e, swapped: false };
+  if (s <= e) return { start: s, end: e, swapped: false };
+  return { start: e, end: s, swapped: true };
 }
 
 /* =========================
@@ -565,7 +564,7 @@ function adaptEWMA(payload) {
   const series = pts
     .map((p) => ({
       label: p.week || p.label || "",
-      value: toNum(p.z) ?? toNum(p.lowRate),
+      value: toNum(p.z) ?? toNum(p.lowRate) ?? toNum(p.value),
       alert: !!p.alert,
     }))
     .filter((p) => p.value !== null);
@@ -699,23 +698,6 @@ function Dropdown({ value, onChange, options, placeholder, dir = "ltr" }) {
   );
 }
 
-function SkeletonCard({ wide = false }) {
-  return (
-    <div className={`card ${wide ? "cardWide" : ""}`}>
-      <div className="cardHeader">
-        <div className="cardTitle" style={{ opacity: 0.75 }}>
-          …
-        </div>
-      </div>
-      <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-        <div style={{ height: 12, borderRadius: 8, background: "rgba(255,255,255,0.06)" }} />
-        <div style={{ height: 12, borderRadius: 8, background: "rgba(255,255,255,0.06)" }} />
-        <div style={{ height: 12, width: "70%", borderRadius: 8, background: "rgba(255,255,255,0.06)" }} />
-      </div>
-    </div>
-  );
-}
-
 /* =========================
    ✅ Reusable Param slider
    ========================= */
@@ -741,309 +723,9 @@ function ParamSlider({ name, value, min, max, step = 0.1, onChange, hint }) {
 }
 
 /* =========================
-   ✅ Auto-generated INFO + Interpretation (from runData)
-   ========================= */
-function detectTriggerMethods(results) {
-  const out = [];
-  if (!results) return out;
-
-  const ewLast = Array.isArray(results?.ewma?.points)
-    ? results.ewma.points[results.ewma.points.length - 1]
-    : null;
-  const cuLast = Array.isArray(results?.cusum?.points)
-    ? results.cusum.points[results.cusum.points.length - 1]
-    : null;
-  const faLast = Array.isArray(results?.farrington?.points)
-    ? results.farrington.points[results.farrington.points.length - 1]
-    : null;
-
-  if (ewLast?.alert) out.push("EWMA");
-  if (cuLast?.alert) out.push("CUSUM");
-  if (faLast?.alert) out.push("FARRINGTON");
-
-  return out;
-}
-
-function buildInfoText({
-  lang,
-  scopeMode,
-  facilityId,
-  regionId,
-  labId,
-  presetLabel,
-  advanced,
-  methodsSelected,
-  decision,
-  counts,
-  dataRange,
-  dataQuality,
-  results,
-  lastUpdated,
-}) {
-  const isAR = lang === "ar";
-  const scopeName =
-    scopeMode === "facility"
-      ? (facilityId?.trim() ? `Facility: ${facilityId.trim()}` : "Facility: —")
-      : (regionId?.trim() ? `Region: ${regionId.trim()}` : "Region: —");
-
-  const scopeLine = isAR
-    ? (scopeMode === "facility"
-        ? `النطاق: مرفق صحي (${facilityId?.trim() || "—"})`
-        : `النطاق: منطقة (${regionId?.trim() || "—"})`)
-    : scopeName;
-
-  const labLine = labId?.trim()
-    ? (isAR ? `المختبر: ${labId.trim()}` : `Lab: ${labId.trim()}`)
-    : null;
-
-  const rangeLine = isAR
-    ? `النطاق الزمني المتوفر: ${dataRange?.start || "…"} → ${dataRange?.end || "…"}`
-    : `Available time range: ${dataRange?.start || "…"} → ${dataRange?.end || "…"}`;
-
-  const requestedLine = dataRange?.filtered
-    ? (isAR
-        ? `النطاق المطلوب (فلتر المستخدم): ${dataRange.filtered?.start || "…"} → ${dataRange.filtered?.end || "…"}`
-        : `Requested filter: ${dataRange.filtered?.start || "…"} → ${dataRange.filtered?.end || "…"}`)
-    : null;
-
-  const methodsLine = isAR
-    ? `الطرق المستخدمة: ${methodsSelected.map((m) => m.toUpperCase()).join(" + ")}`
-    : `Methods: ${methodsSelected.map((m) => m.toUpperCase()).join(" + ")}`;
-
-  const configLine = isAR
-    ? `الحساسية: ${presetLabel} • إعدادات متقدمة: ${advanced ? "نعم" : "لا"}`
-    : `Sensitivity: ${presetLabel} • Advanced tuning: ${advanced ? "Yes" : "No"}`;
-
-  const dq = dataQuality || {};
-  const dqLine = isAR
-    ? `جودة البيانات: إجمالي السجلات ${dq.overallN ?? "—"} • تغطية أسابيع ${dq.weeksCoverage ?? "—"} • أحدث أسبوع N=${dq.recentN ?? "—"}`
-    : `Data quality: total N=${dq.overallN ?? "—"} • weeks covered=${dq.weeksCoverage ?? "—"} • most recent week N=${dq.recentN ?? "—"}`;
-
-  const flags = [];
-  if (dq.smallN) flags.push(isAR ? "حجم عينة صغير (قد يرفع عدم اليقين)" : "Small sample size (higher uncertainty)");
-  if (dq.sparseSeries) flags.push(isAR ? "سلسلة زمنية قصيرة (تحتاج أسابيع أكثر)" : "Short time-series (needs more weeks)");
-  const flagsLine = flags.length ? (isAR ? `ملاحظات: ${flags.join(" • ")}` : `Notes: ${flags.join(" • ")}`) : null;
-
-  const triggers = detectTriggerMethods(results);
-  const triggerLine = isAR
-    ? (triggers.length
-        ? `سبب الإشارة: تجاوز حد الإنذار في ${triggers.join(" + ")} في الأسبوع الأخير.`
-        : `سبب الإشارة: لا يوجد تجاوز حد إنذار في الأسبوع الأخير (قد تكون إشارات سابقة أو ضمن النطاق).`)
-    : (triggers.length
-        ? `Signal driver: threshold exceeded by ${triggers.join(" + ")} in the most recent week.`
-        : `Signal driver: no threshold exceedance in the most recent week (may reflect earlier weeks or filter effects).`);
-
-  const ensembleLine = isAR
-    ? `ملخص التجميع: إنذار=${counts?.alert ?? 0} • مراقبة=${counts?.watch ?? 0} • القرار النهائي=${String(decision || "INFO").toUpperCase()}`
-    : `Ensemble: Alert=${counts?.alert ?? 0} • Watch=${counts?.watch ?? 0} • Final decision=${String(decision || "INFO").toUpperCase()}`;
-
-  const updatedLine = lastUpdated
-    ? (isAR ? `آخر تحديث للنظام: ${String(lastUpdated)}` : `System last updated: ${String(lastUpdated)}`)
-    : null;
-
-  const paragraphs = [
-    isAR
-      ? "ملخص علمي مُولَّد تلقائيًا من بيانات التحليل. يوضح النطاق، الطرق، جودة البيانات، ولماذا ظهر القرار بهذه الصورة."
-      : "Auto-generated scientific snapshot of this analysis, including scope, methods, data quality, and why the decision looks like this.",
-    joinNonEmpty([scopeLine, labLine]),
-    joinNonEmpty([rangeLine, requestedLine]),
-    methodsLine,
-    configLine,
-    dqLine,
-    flagsLine,
-    triggerLine,
-    ensembleLine,
-    updatedLine,
-  ].filter(Boolean);
-
-  return paragraphs.join("\n\n");
-}
-
-function buildInterpretationText({
-  lang,
-  sigPack,
-  decision,
-  counts,
-  methodsSelected,
-  results,
-}) {
-  const isAR = lang === "ar";
-  const triggers = detectTriggerMethods(results);
-
-  const intro = isAR
-    ? "تفسير علمي مُفصّل (آلي) يربط بين نتائج الخوارزميات ومعنى القرار من منظور مراقبة الصحة العامة."
-    : "Detailed auto-generated interpretation linking algorithm outputs to a public-health surveillance meaning.";
-
-  const ensemble = isAR
-    ? `تم تشغيل ${methodsSelected.length} طرق إحصائية (${methodsSelected.map((m) => m.toUpperCase()).join(", ")}). نتج عن ذلك: إنذار=${counts?.alert ?? 0}، مراقبة=${counts?.watch ?? 0}، وبناءً عليه القرار = ${String(decision || "INFO").toUpperCase()}.`
-    : `Ran ${methodsSelected.length} statistical methods (${methodsSelected.map((m) => m.toUpperCase()).join(", ")}). Ensemble summary: Alert=${counts?.alert ?? 0}, Watch=${counts?.watch ?? 0}, therefore decision = ${String(decision || "INFO").toUpperCase()}.`;
-
-  const driver = isAR
-    ? (triggers.length
-        ? `المحرك الأساسي للإشارة: ${triggers.join(" + ")} تجاوز/تجاوزت الحد الأعلى المتوقع في الأسبوع الأخير، وهو ما يُقرأ كارتفاع غير معتاد إحصائيًا مقارنة بخط الأساس.`
-        : `لم يظهر تجاوز لحد الإنذار في الأسبوع الأخير؛ قد تكون الإشارة مرتبطة بأسابيع سابقة داخل النطاق الزمني أو بقيم قريبة من الحد.`)
-    : (triggers.length
-        ? `Primary driver: ${triggers.join(" + ")} exceeded the expected upper threshold in the most recent week, suggesting an unusual statistical deviation from baseline.`
-        : `No threshold exceedance in the most recent week; the signal may relate to earlier weeks in the selected time window or near-threshold behavior.`);
-
-  const clinicalMeaning = isAR
-    ? "من منظور وبائي، هذا القرار لا يعني تشخيصًا فرديًا؛ بل يعني أن نمط النتائج (مجمّعًا أسبوعيًا) أصبح غير معتاد ويستحق الاستقصاء الميداني والمتابعة."
-    : "From an epidemiological standpoint, this is not an individual diagnosis; it indicates the weekly aggregated pattern has become unusual and warrants investigation and follow-up.";
-
-  const recommended = isAR
-    ? "توصية تشغيلية: التحقق من جودة الإدخال (التواريخ/المنطقة/المرفق)، مراجعة التوزيع العمري/النوعي، مقارنة مصادر متعددة، ثم إعادة التشغيل خلال 1–2 أسبوع لمراقبة الاستمرارية."
-    : "Operational recommendation: validate ingestion quality (dates/scope), review age/sex stratification, compare multiple sources, then re-run within 1–2 weeks to assess persistence.";
-
-  const rationale = sigPack?.rationale
-    ? (isAR ? `مبرر الخوارزمية (Signature Insight): ${String(sigPack.rationale)}` : `Signature Insight rationale: ${String(sigPack.rationale)}`)
-    : null;
-
-  const narrative = sigPack?.narrative
-    ? (isAR ? `الخلاصة السردية: ${String(sigPack.narrative)}` : `Narrative summary: ${String(sigPack.narrative)}`)
-    : null;
-
-  return [intro, ensemble, driver, clinicalMeaning, recommended, rationale, narrative].filter(Boolean).join("\n\n");
-}
-
-/* =========================
-   ✅ Strat view
-   ========================= */
-function StratificationPanel({ t, lang, profileData, fallbackInsight }) {
-  const profile = profileData?.profile || profileData || null;
-  if (!profile) return <div className="muted">{t.empty}</div>;
-
-  const overall = profile?.overall || null;
-  const byAge = Array.isArray(profile?.byAge) ? profile.byAge : [];
-  const bySex = Array.isArray(profile?.bySex) ? profile.bySex : [];
-
-  function fmtRate(x, decimals = 2) {
-  if (x === null || x === undefined) return "—";
-  const n = Number(x);
-  if (!Number.isFinite(n)) return "—";
-  return (n * 100).toFixed(decimals) + "%";
-}
-
-  // ✅ NEW helpers for Key text
-  function fmtPctFromRate(rate, digits = 1) {
-    if (rate === null || rate === undefined) return "—";
-    const n = Number(rate);
-    if (!Number.isFinite(n)) return "—";
-    return `${(n * 100).toFixed(digits)}%`;
-  }
-
-  // ✅ NEW Key builder (byAgeSex)
-  function buildKeyFindingFromData() {
-    const groups = Array.isArray(profile?.byAgeSex) ? profile.byAgeSex : [];
-    const MIN_N = 10;
-
-    const top = groups
-      .filter((g) => (g?.n ?? 0) >= MIN_N && typeof g?.lowRate === "number")
-      .sort((a, b) => (b.lowRate - a.lowRate))[0];
-
-    if (!top) return safeText(fallbackInsight?.keyFinding) || "—";
-
-    const rateTxt = fmtPctFromRate(top.lowRate, 1);
-
-    if (lang === "ar") {
-      return `أعلى نسبة كانت لدى (العمر ${top.ageBand}, الجنس ${top.sex}) بمعدل ${rateTxt} من أصل ${top.n} فحص.`;
-    }
-    return `Highest rate observed in (age ${top.ageBand}, sex ${top.sex}) at ${rateTxt} based on ${top.n} tests.`;
-  }
-
-  return (
-    <div className="stratGrid">
-      {/* ✅ Overall */}
-      <div className="stratBox">
-        <div className="stratTitle">{t.overall}</div>
-        {overall ? (
-          <table className="stratTable">
-            <thead>
-              <tr>
-                <th>{t.n}</th>
-                <th>{t.low}</th>
-                <th className="numCell">{t.lowRate}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>{overall.n ?? "—"}</td>
-                <td>{overall.low ?? "—"}</td>
-                <td className="numCell">{fmtRate(overall.lowRate)}</td>
-              </tr>
-            </tbody>
-          </table>
-        ) : (
-          <div className="subtle">{t.empty}</div>
-        )}
-      </div>
-
-      {/* ✅ By Sex */}
-      <div className="stratBox">
-        <div className="stratTitle">{t.bySex}</div>
-        {bySex.length ? (
-          <table className="stratTable">
-            <thead>
-              <tr>
-                <th>{t.sex}</th>
-                <th>{t.n}</th>
-                <th className="numCell">{t.lowRate}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {bySex.map((r, idx) => (
-                <tr key={idx}>
-                  <td>{r.sex ?? "—"}</td>
-                  <td>{r.n ?? "—"}</td>
-                  <td className="numCell">{fmtRate(r.lowRate)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <div className="subtle">{t.empty}</div>
-        )}
-      </div>
-
-      {/* ✅ By Age */}
-      <div className="stratBox" style={{ gridColumn: "1 / -1" }}>
-        <div className="stratTitle">{t.byAge}</div>
-        {byAge.length ? (
-          <table className="stratTable">
-            <thead>
-              <tr>
-                <th>{t.ageBand}</th>
-                <th>{t.n}</th>
-                <th className="numCell">{t.lowRate}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {byAge.map((r, idx) => (
-                <tr key={idx}>
-                  <td>{r.ageBand ?? "—"}</td>
-                  <td>{r.n ?? "—"}</td>
-                  <td className="numCell">{fmtRate(r.lowRate)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <div className="subtle">{t.empty}</div>
-        )}
-      </div>
-
-      {/* ✅ Key finding block below tables (optional) */}
-      <div className="stratBox" style={{ gridColumn: "1 / -1" }}>
-        <div className="stratTitle">{lang === "ar" ? "Key" : "Key"}</div>
-        <div className="muted">{buildKeyFindingFromData()}</div>
-      </div>
-    </div>
-  );
-}
-
-/* =========================
    ✅ Page
    ========================= */
-export default function SurveillanceDashboard({ lang = "ar" }) {
+export default function SurveillanceDashboard({ lang = "en" }) {
   const t = useMemo(() => TXT[lang] || TXT.en, [lang]);
   const isRTL = lang === "ar";
 
@@ -1052,15 +734,21 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
     import.meta.env.VITE_API_URL ||
     "http://localhost:4000";
 
-  const [scopeMode, setScopeMode] = useState("facility");
-  const [facilityId, setFacilityId] = useState("AMM-NEWCAMP-01");
-  const [regionId, setRegionId] = useState("AMMAN_SOUTH");
+  // ✅ Start Global + empty inputs (per your request)
+  const [scopeMode, setScopeMode] = useState("global");
+  const [facilityId, setFacilityId] = useState("");
+  const [regionId, setRegionId] = useState("");
   const [labId, setLabId] = useState("");
 
-  const [signal, setSignal] = useState("anemia");
+  // ✅ Test selection
+  const [testCode, setTestCode] = useState("HB");
+  const derivedSignal = useMemo(() => getSignalForTest(testCode), [testCode]);
+  const derivedSignalLabel = useMemo(() => getSignalLabel(t, derivedSignal), [t, derivedSignal]);
+
+  // ✅ Methods
   const [methods, setMethods] = useState({ ewma: true, cusum: true, farrington: true });
 
-  // ✅ time filter + preset
+  // ✅ Time filter + preset
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [preset, setPreset] = useState("standard");
@@ -1068,7 +756,6 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
   // ✅ Advanced
   const [advanced, setAdvanced] = useState(false);
 
-  // params state (used when advanced=1)
   const [ewmaLambda, setEwmaLambda] = useState(PRESETS.standard.ewma.lambda);
   const [ewmaL, setEwmaL] = useState(PRESETS.standard.ewma.L);
   const [ewmaBaselineN, setEwmaBaselineN] = useState(PRESETS.standard.ewma.baselineN);
@@ -1098,13 +785,13 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
   const [loading, setLoading] = useState(false);
   const [runData, setRunData] = useState(null);
   const [reportText, setReportText] = useState("");
-  const [profileData, setProfileData] = useState(null);
   const [errMsg, setErrMsg] = useState("");
   const [copied, setCopied] = useState(false);
 
   const [lastUpdated, setLastUpdated] = useState(null);
   const [dataRange, setDataRange] = useState(null);
 
+  // Charts payload from RUN (general)
   const [chartsPayload, setChartsPayload] = useState(null);
 
   // Upload
@@ -1144,19 +831,17 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
     return list.map((x) => x.toUpperCase()).join(" + ");
   }
 
-  function normalizeDateRange(startDate, endDate) {
-    const s = (startDate || "").trim();
-    const e = (endDate || "").trim();
-    if (!s || !e) return { start: s, end: e, swapped: false };
-    if (s <= e) return { start: s, end: e, swapped: false };
-    return { start: e, end: s, swapped: true };
-  }
-
   function buildScopeQuery() {
     const params = new URLSearchParams();
 
-    if (scopeMode === "facility") params.set("facilityId", String(facilityId || "").trim());
-    else params.set("regionId", String(regionId || "").trim());
+    // ✅ scope (optional)
+    if (scopeMode === "facility" && String(facilityId || "").trim()) {
+      params.set("facilityId", String(facilityId || "").trim());
+    }
+    if (scopeMode === "region" && String(regionId || "").trim()) {
+      params.set("regionId", String(regionId || "").trim());
+    }
+    // global -> send nothing
 
     const lab = String(labId || "").trim();
     if (lab) params.set("labId", lab);
@@ -1167,18 +852,36 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
 
     if (preset) params.set("preset", preset);
 
+    // ✅ generalize: always pass testCode
+    if (testCode) params.set("testCode", String(testCode));
+
     if (advanced) {
       params.set("advanced", "1");
 
       params.set("ewmaLambda", String(clampNum(ewmaLambda, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max)));
       params.set("ewmaL", String(clampNum(ewmaL, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max)));
-      params.set("ewmaBaselineN", String(clampInt(ewmaBaselineN, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max)));
+      params.set(
+        "ewmaBaselineN",
+        String(clampInt(ewmaBaselineN, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max))
+      );
 
-      params.set("cusumBaselineN", String(clampInt(cusumBaselineN, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max)));
+      params.set(
+        "cusumBaselineN",
+        String(clampInt(cusumBaselineN, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max))
+      );
       params.set("cusumK", String(clampNum(cusumK, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max)));
       params.set("cusumH", String(clampNum(cusumH, BOUNDS.cusum.h.min, BOUNDS.cusum.h.max)));
 
-      params.set("farringtonBaselineWeeks", String(clampInt(farringtonBaselineWeeks, BOUNDS.farrington.baselineWeeks.min, BOUNDS.farrington.baselineWeeks.max)));
+      params.set(
+        "farringtonBaselineWeeks",
+        String(
+          clampInt(
+            farringtonBaselineWeeks,
+            BOUNDS.farrington.baselineWeeks.min,
+            BOUNDS.farrington.baselineWeeks.max
+          )
+        )
+      );
       params.set("farringtonZ", String(clampNum(farringtonZ, BOUNDS.farrington.z.min, BOUNDS.farrington.z.max)));
     }
 
@@ -1186,14 +889,14 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
   }
 
   function scopeLabel() {
+    if (scopeMode === "global") return isRTL ? "وطني (كل البيانات)" : "Global (all data)";
+
     const core =
       scopeMode === "facility"
         ? `${t.modeFacility}: ${facilityId?.trim() || t.notAvailable}`
         : `${t.modeRegion}: ${regionId?.trim() || t.notAvailable}`;
 
-    const lab = labId?.trim()
-      ? (lang === "ar" ? ` • المختبر: ${labId.trim()}` : ` • Lab: ${labId.trim()}`)
-      : "";
+    const lab = labId?.trim() ? (isRTL ? ` • المختبر: ${labId.trim()}` : ` • Lab: ${labId.trim()}`) : "";
     return core + lab;
   }
 
@@ -1205,7 +908,9 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
     setUploadResult(null);
 
     try {
-      const j = await postFile(`${apiBase}/api/upload/lab-results`, uploadFile);
+      // ✅ matches your backend: POST /api/upload/lab-results
+      const j = await postFile(`${apiBase}/api/upload/csv`, uploadFile);
+
       setUploadResult(j);
 
       const dr = extractDateRange(j);
@@ -1224,12 +929,22 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
 
   async function runAnalysis() {
     const m = selectedMethods();
-    if (!signal || m.length === 0) return;
-    if (scopeMode === "facility" && !facilityId?.trim()) return;
-    if (scopeMode === "region" && !regionId?.trim()) return;
+    if (!m.length) return;
+
+    // ✅ minimal validation (only when user selects that scope)
+    if (scopeMode === "facility" && !facilityId.trim()) {
+      setErrMsg(t.requiredFacility);
+      return;
+    }
+    if (scopeMode === "region" && !regionId.trim()) {
+      setErrMsg(t.requiredRegion);
+      return;
+    }
 
     if (abortRef.current) {
-      try { abortRef.current.abort(); } catch {}
+      try {
+        abortRef.current.abort();
+      } catch {}
     }
     const controller = new AbortController();
     abortRef.current = controller;
@@ -1237,7 +952,6 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
     setLoading(true);
     setRunData(null);
     setReportText("");
-    setProfileData(null);
     setErrMsg("");
     setCopied(false);
     setChartsPayload(null);
@@ -1245,9 +959,9 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
     try {
       const scopeParams = buildScopeQuery();
 
-      // 1) RUN
+      // ✅ General run endpoint (signal + testCode)
       const runParams = new URLSearchParams(scopeParams);
-      runParams.set("signal", signal);
+      runParams.set("signal", derivedSignal);
       runParams.set("methods", m.join(","));
       runParams.set("lang", "both");
 
@@ -1257,46 +971,25 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
       const dr1 = extractDateRange(runJ);
       if (dr1) setDataRange(dr1);
 
-      // 2) Charts per method
-      const chartParams = new URLSearchParams(scopeParams);
-      chartParams.set("lang", "en");
-
-      const tasks = [];
-      tasks.push(m.includes("ewma") ? fetchJSON(`${apiBase}/api/analytics/anemia-ewma?${chartParams.toString()}`, controller.signal) : Promise.resolve(null));
-      tasks.push(m.includes("cusum") ? fetchJSON(`${apiBase}/api/analytics/anemia-cusum?${chartParams.toString()}`, controller.signal) : Promise.resolve(null));
-      tasks.push(m.includes("farrington") ? fetchJSON(`${apiBase}/api/analytics/anemia-farrington?${chartParams.toString()}`, controller.signal) : Promise.resolve(null));
-
-      const [ew, cu, fa] = await Promise.allSettled(tasks);
+      // ✅ Build chart payload from run results (no anemia-only endpoints)
+      const results = runJ?.data?.results || {};
       setChartsPayload({
-        ewma: ew.status === "fulfilled" ? ew.value : null,
-        cusum: cu.status === "fulfilled" ? cu.value : null,
-        farrington: fa.status === "fulfilled" ? fa.value : null,
+        ewma: results?.ewma ? { data: { ewma: results.ewma } } : null,
+        cusum: results?.cusum ? { data: { cusum: results.cusum } } : null,
+        farrington: results?.farrington ? { data: { farrington: results.farrington } } : null,
       });
 
-      // 3) REPORT (UI language)
+      // ✅ Report endpoint (signal + testCode)
       const reportParams = new URLSearchParams(scopeParams);
-      reportParams.set("signal", signal);
+      reportParams.set("signal", derivedSignal);
+      reportParams.set("testCode", String(testCode));
       reportParams.set("methods", m.join(","));
       reportParams.set("lang", lang);
 
       const repJ = await fetchJSON(`${apiBase}/api/analytics/report?${reportParams.toString()}`, controller.signal);
-
-      const dr2 = extractDateRange(repJ);
-      if (dr2) setDataRange(dr2);
-
       const extracted = extractReport(repJ?.data?.report, lang);
       const finalReport = (extracted?.trim() ? extracted : "").trim();
       setReportText(finalReport || t.insufficient);
-
-      // 4) PROFILE
-      const profParams = new URLSearchParams(scopeParams);
-      profParams.set("lang", lang);
-
-      const profJ = await fetchJSON(`${apiBase}/api/analytics/anemia-profile?${profParams.toString()}`, controller.signal);
-      if (profJ?.ok) setProfileData(profJ?.data || null);
-
-      const dr3 = extractDateRange(profJ);
-      if (dr3) setDataRange(dr3);
 
       try {
         const hj = await fetchJSON(`${apiBase}/health`, controller.signal);
@@ -1337,72 +1030,25 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
   const decision = upper(consensus?.decision || "info");
   const counts = consensus?.counts || { alert: 0, watch: 0 };
 
-  const sigPack = runData?.signatureInsight
-    ? lang === "ar" ? runData.signatureInsight?.ar : runData.signatureInsight?.en
-    : null;
+  // ✅ stratification
+  const profile = runData?.profile || null;
+  const profileInsight = runData?.profileInsight || null;
 
-  const profInsight = profileData?.insight;
-
-  const trustUpdatedRaw = lastUpdated ? safeText(lastUpdated) : "";
-  const trustUpdated = trustUpdatedRaw ? formatDateTime(trustUpdatedRaw, lang) : t.notAvailable;
-
-  const normReq = normalizeDateRange(startDate, endDate);
-  const requested = (normReq.start || normReq.end)
-    ? formatRangeLabel(normReq.start, normReq.end, lang)
-    : t.notAvailable;
-
-  const effective = (dataRange?.start || dataRange?.end)
-    ? formatRangeLabel(dataRange?.start, dataRange?.end, lang)
-    : t.notAvailable;
-
-  const trustAgg = "WEEKLY";
   const trustMethods = methodsLabel(selectedMethods());
   const dataset = uploadResult?.ok ? t.uploadOk : t.notAvailable;
-  const updatedWeeks = uploadResult?.data?.weeklyAggregates?.updated ?? null;
 
   const ewCfg = adaptEWMA(chartsPayload?.ewma);
   const cuCfg = adaptCUSUM(chartsPayload?.cusum);
   const faCfg = adaptFarrington(chartsPayload?.farrington);
 
-  const presetLabel =
-    preset === "low" ? t.presetLow :
-    preset === "high" ? t.presetHigh :
-    t.presetStandard;
+  const presetLabel = preset === "low" ? t.presetLow : preset === "high" ? t.presetHigh : t.presetStandard;
 
-  const infoText = useMemo(() => {
-    if (!runData) return "";
-    return buildInfoText({
-      lang,
-      scopeMode,
-      facilityId,
-      regionId,
-      labId,
-      presetLabel,
-      advanced,
-      methodsSelected: selectedMethods(),
-      decision,
-      counts,
-      dataRange,
-      dataQuality: runData?.meta?.dataQuality,
-      results: runData?.results,
-      lastUpdated: trustUpdated !== t.notAvailable ? trustUpdated : null,
-    });
-  }, [
-    runData, lang, scopeMode, facilityId, regionId, labId,
-    presetLabel, advanced, decision, counts, dataRange, trustUpdated
-  ]);
+  const canRunNow = !loading && !uploading;
 
-  const interpretationText = useMemo(() => {
-    if (!runData) return "";
-    return buildInterpretationText({
-      lang,
-      sigPack,
-      decision,
-      counts,
-      methodsSelected: selectedMethods(),
-      results: runData?.results,
-    });
-  }, [runData, lang, sigPack, decision, counts]);
+  const insightText =
+    lang === "ar"
+      ? profileInsight?.ar?.keyFinding || profileInsight?.ar?.summary || ""
+      : profileInsight?.en?.keyFinding || profileInsight?.en?.summary || "";
 
   return (
     <div className="dash" dir={isRTL ? "rtl" : "ltr"}>
@@ -1430,14 +1076,8 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
         </div>
 
         {uploadErr ? <div className="muted" style={{ marginTop: 6 }}>{uploadErr}</div> : null}
-        {uploadResult?.ok ? (
-          <div className="muted" style={{ marginTop: 6 }}>
-            {t.uploadOk}
-            {updatedWeeks !== null ? ` • ${t.updatedWeeks}: ${updatedWeeks}` : ""}
-          </div>
-        ) : null}
 
-        {/* Scope */}
+        {/* Scope + Lab */}
         <div className="formRow" style={{ marginTop: 12 }}>
           <div className="field">
             <label>{t.scope}</label>
@@ -1445,10 +1085,7 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
               dir={isRTL ? "rtl" : "ltr"}
               value={scopeMode}
               onChange={(v) => setScopeMode(v)}
-              options={[
-                { value: "facility", label: t.modeFacility },
-                { value: "region", label: t.modeRegion },
-              ]}
+              options={getScopeOptions(t)}
             />
           </div>
 
@@ -1458,27 +1095,63 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
           </div>
         </div>
 
+        {/* Facility/Region + Test */}
         <div className="formRow">
           {scopeMode === "facility" ? (
             <div className="field">
               <label>{t.facility}</label>
-              <input value={facilityId} onChange={(e) => setFacilityId(e.target.value)} placeholder={t.placeholderFacility} />
+              <input
+                value={facilityId}
+                onChange={(e) => setFacilityId(e.target.value)}
+                placeholder={t.placeholderFacility}
+              />
             </div>
-          ) : (
+          ) : scopeMode === "region" ? (
             <div className="field">
               <label>{t.region}</label>
               <input value={regionId} onChange={(e) => setRegionId(e.target.value)} placeholder={t.placeholderRegion} />
             </div>
+          ) : (
+            <div className="field">
+              <label>{isRTL ? "الكل" : "All"}</label>
+              <input value={isRTL ? " وطني  (كل البيانات)" : "Global (all data)"} readOnly />
+            </div>
           )}
 
           <div className="field">
-            <label>{t.signal}</label>
+            <label>{t.test}</label>
             <Dropdown
               dir={isRTL ? "rtl" : "ltr"}
-              value={signal}
-              onChange={(v) => setSignal(v)}
-              options={[{ value: "anemia", label: t.anemia }]}
+              value={testCode}
+              onChange={(v) => setTestCode(v)}
+              options={getTestOptions(t)}
             />
+          </div>
+        </div>
+
+        {/* Signal (auto) + note */}
+        <div className="formRow">
+          <div className="field">
+            <label>{t.signal}</label>
+            <input value={derivedSignalLabel} readOnly />
+            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+              {t.signalHint}
+            </div>
+          </div>
+
+          <div className="field" style={{ alignSelf: "end" }}>
+            <div
+              className="muted"
+              style={{
+                padding: 10,
+                borderRadius: 12,
+                border: "1px solid rgba(255,255,255,0.14)",
+                background: "rgba(255,255,255,0.06)",
+                fontSize: 12,
+              }}
+            >
+              <b>{t.analysisNoteTitle}:</b> {t.analysisNoteBody}
+            </div>
           </div>
         </div>
 
@@ -1531,22 +1204,11 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
             </div>
 
             <div className="actions">
-              <button
-                type="button"
-                className="ghostBtn"
-                onClick={() => setAdvanced((s) => !s)}
-                disabled={loading}
-              >
+              <button type="button" className="ghostBtn" onClick={() => setAdvanced((s) => !s)} disabled={loading}>
                 {advanced ? t.advancedOff : t.advancedOn}
               </button>
 
-              <button
-                type="button"
-                className="ghostBtn"
-                onClick={resetAdvancedToPreset}
-                disabled={loading}
-                title="Reset"
-              >
+              <button type="button" className="ghostBtn" onClick={resetAdvancedToPreset} disabled={loading}>
                 {t.resetToPreset}
               </button>
             </div>
@@ -1556,7 +1218,6 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
             <div className="advGrid">
               <div className="advCard">
                 <div className="advCardTitle">{t.ewmaBlock}</div>
-
                 <ParamSlider
                   name={t.paramLambda}
                   value={ewmaLambda}
@@ -1566,7 +1227,6 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
                   onChange={(v) => setEwmaLambda(clampNum(v, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max))}
                   hint={t.hintLambda}
                 />
-
                 <ParamSlider
                   name={t.paramL}
                   value={ewmaL}
@@ -1576,7 +1236,6 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
                   onChange={(v) => setEwmaL(clampNum(v, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max))}
                   hint={t.hintL}
                 />
-
                 <ParamSlider
                   name={t.paramEwmaBaselineN}
                   value={ewmaBaselineN}
@@ -1590,7 +1249,6 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
 
               <div className="advCard">
                 <div className="advCardTitle">{t.cusumBlock}</div>
-
                 <ParamSlider
                   name={t.paramCusumBaselineN}
                   value={cusumBaselineN}
@@ -1600,7 +1258,6 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
                   onChange={(v) => setCusumBaselineN(clampInt(v, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max))}
                   hint={t.hintBaselineN}
                 />
-
                 <ParamSlider
                   name={t.paramK}
                   value={cusumK}
@@ -1610,7 +1267,6 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
                   onChange={(v) => setCusumK(clampNum(v, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max))}
                   hint={t.hintK}
                 />
-
                 <ParamSlider
                   name={t.paramH}
                   value={cusumH}
@@ -1624,7 +1280,6 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
 
               <div className="advCard">
                 <div className="advCardTitle">{t.farringtonBlock}</div>
-
                 <ParamSlider
                   name={t.paramFarrBaseline}
                   value={farringtonBaselineWeeks}
@@ -1634,7 +1289,6 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
                   onChange={(v) => setFarringtonBaselineWeeks(clampInt(v, BOUNDS.farrington.baselineWeeks.min, BOUNDS.farrington.baselineWeeks.max))}
                   hint={t.hintFarrBaseline}
                 />
-
                 <ParamSlider
                   name={t.paramZ}
                   value={farringtonZ}
@@ -1649,7 +1303,7 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
           ) : null}
         </div>
 
-        {/* Methods */}
+        {/* Methods + Actions */}
         <div className="methodRow">
           <div className="field" style={{ flex: 1 }}>
             <label>{t.methods}</label>
@@ -1671,7 +1325,7 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
               {t.quickHigh}
             </button>
 
-            <button type="button" className="primaryBtn" onClick={runAnalysis} disabled={loading}>
+            <button type="button" className="primaryBtn" onClick={runAnalysis} disabled={!canRunNow}>
               {loading ? "…" : t.run}
             </button>
 
@@ -1681,6 +1335,7 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
           </div>
         </div>
 
+        {/* Errors */}
         {errMsg ? (
           <div className="muted" style={{ marginTop: 10 }}>
             {t.error} {safeText(errMsg)}
@@ -1707,152 +1362,169 @@ export default function SurveillanceDashboard({ lang = "ar" }) {
 
           <div className="mini">
             <div className="miniRow">
-              <div className="miniKey">{t.aggregation}</div>
-              <div className="miniVal">{trustAgg}</div>
-            </div>
-
-            <div className="miniRow">
-              <div className="miniKey">{t.requestedRange}</div>
-              <div className="miniVal">{requested}</div>
-            </div>
-
-            <div className="miniRow">
-              <div className="miniKey">{t.effectiveRange}</div>
-              <div className="miniVal">{effective}</div>
-            </div>
-
-            <div className="miniRow">
               <div className="miniKey">{t.methodsUsed}</div>
               <div className="miniVal">{trustMethods}</div>
             </div>
-
             <div className="miniRow">
               <div className="miniKey">{t.lastUpdated}</div>
-              <div className="miniVal">{trustUpdated}</div>
+              <div className="miniVal">{lastUpdated ? String(lastUpdated) : t.notAvailable}</div>
             </div>
           </div>
         </div>
       </section>
 
+      {/* Results */}
       <section className="grid">
-        {loading ? (
-          <>
-            <SkeletonCard />
-            <SkeletonCard />
-            <SkeletonCard />
-            <SkeletonCard />
-            <SkeletonCard wide />
-          </>
-        ) : (
-          <>
-            <DecisionCard title={t.consensus} value={upper(decision)} hint={sigPack?.rationale || t.empty} />
+        <DecisionCard title={t.consensus} value={upper(decision)} hint={t.empty} />
 
-            <div className="card">
-              <div className="cardHeader">
-                <div className="cardTitle">{t.ensemble}</div>
-              </div>
-              <div className="stats">
-                <div className="stat">
-                  <div className="statNum">{counts.watch ?? 0}</div>
-                  <div className="statLbl">{t.watch}</div>
+        <div className="card">
+          <div className="cardHeader">
+            <div className="cardTitle">{t.ensemble}</div>
+          </div>
+          <div className="stats">
+            <div className="stat">
+              <div className="statNum">{counts.watch ?? 0}</div>
+              <div className="statLbl">{t.watch}</div>
+            </div>
+            <div className="stat">
+              <div className="statNum">{counts.alert ?? 0}</div>
+              <div className="statLbl">{t.alerts}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="card cardWide">
+          <div className="cardHeader">
+            <div className="cardTitle">{t.chartsTitle}</div>
+          </div>
+          <div className="muted" style={{ marginBottom: 10 }}>
+            {t.chartsHint}
+          </div>
+
+          <div style={{ display: "grid", gap: 12 }}>
+            {methods.ewma ? <SimpleSeriesChart {...ewCfg} /> : null}
+            {methods.cusum ? <SimpleSeriesChart {...cuCfg} /> : null}
+            {methods.farrington ? <SimpleSeriesChart {...faCfg} /> : null}
+          </div>
+        </div>
+
+        {/* ✅ Population Stratification (RESTORED) */}
+        <div className="card cardWide">
+          <div className="cardHeader">
+            <div className="cardTitle">{t.strat}</div>
+          </div>
+
+          {!profile ? (
+            <div className="muted">{t.empty}</div>
+          ) : (
+            <div style={{ display: "grid", gap: 12 }}>
+              {/* Overall */}
+              <div className="mini">
+                <div className="miniRow">
+                  <div className="miniKey">{t.totalSamples}</div>
+                  <div className="miniVal">{profile?.overall?.n ?? 0}</div>
                 </div>
-                <div className="stat">
-                  <div className="statNum">{counts.alert ?? 0}</div>
-                  <div className="statLbl">{t.alerts}</div>
+                <div className="miniRow">
+                  <div className="miniKey">{t.signalRate}</div>
+                  <div className="miniVal">{fmtPct(profile?.overall?.lowRate ?? profile?.overall?.highRate)}</div>
                 </div>
               </div>
-            </div>
 
-            {/* INFO */}
-            <div className="card">
-              <div className="cardHeader">
-                <div>
-                  <div className="cardTitle">{t.infoTitle}</div>
-                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>{t.infoHint}</div>
+              {/* By Sex */}
+              <div className="mini">
+                <div className="miniRow">
+                  <div className="miniKey">{t.bySex}</div>
+                  <div className="miniVal"></div>
+                </div>
+
+                <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                  {(profile?.bySex || []).map((x, idx) => (
+                    <div key={idx} className="miniRow">
+                      <div className="miniKey">{x.sex}</div>
+                      <div className="miniVal">
+                        {x.n} • {fmtPct(x.lowRate ?? x.highRate)}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
-              <div className="reportBox2" style={{ whiteSpace: "pre-wrap", lineHeight: 1.85, padding: 12, borderRadius: 12 }}>
-                {infoText || t.empty}
-              </div>
-            </div>
 
-            {/* Interpretation */}
-            <div className="card">
-              <div className="cardHeader">
-                <div className="cardTitle">{t.interpretation}</div>
-              </div>
-              <div className="reportBox2" style={{ whiteSpace: "pre-wrap", lineHeight: 1.85, padding: 12, borderRadius: 12 }}>
-                {interpretationText || sigPack?.narrative || t.empty}
-              </div>
-            </div>
-
-            {/* ✅ Population Stratification */}
-            <div className="card">
-              <div className="cardHeader">
-                <div className="cardTitle">{t.strat}</div>
-              </div>
-
-              {profInsight ? (
-                <div className="callout calloutSoft">
-                  <div style={{ fontWeight: 900 }}>{safeText(profInsight.title)}</div>
-                  <div className="muted">{safeText(profInsight.summary)}</div>
-                  {/* ✅ لا نستخدم keyFinding الخام هنا لأن الباك كان يقرّبها */}
+              {/* By Age */}
+              <div className="mini">
+                <div className="miniRow">
+                  <div className="miniKey">{t.byAge}</div>
+                  <div className="miniVal"></div>
                 </div>
-              ) : null}
 
-              <div style={{ marginTop: 10 }}>
-                <StratificationPanel
-                  t={t}
-                  lang={lang}
-                  profileData={profileData}
-                  fallbackInsight={profInsight}
-                />
-              </div>
-            </div>
-
-            {/* Charts */}
-            <div className="card cardWide">
-              <div className="cardHeader">
-                <div className="cardTitle">{t.chartsTitle}</div>
-              </div>
-              <div className="muted" style={{ marginBottom: 10 }}>
-                {t.chartsHint}
+                <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                  {(profile?.byAge || []).map((x, idx) => (
+                    <div key={idx} className="miniRow">
+                      <div className="miniKey">{x.ageBand}</div>
+                      <div className="miniVal">
+                        {x.n} • {fmtPct(x.lowRate ?? x.highRate)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
 
-              <div style={{ display: "grid", gap: 12 }}>
-                {methods.ewma ? <SimpleSeriesChart {...ewCfg} /> : null}
-                {methods.cusum ? <SimpleSeriesChart {...cuCfg} /> : null}
-                {methods.farrington ? <SimpleSeriesChart {...faCfg} /> : null}
-              </div>
-            </div>
+              {/* By Nationality (if backend provides it later) */}
+              {Array.isArray(profile?.byNationality) && profile.byNationality.length ? (
+                <div className="mini">
+                  <div className="miniRow">
+                    <div className="miniKey">{t.byNationality}</div>
+                    <div className="miniVal"></div>
+                  </div>
 
-            <div className="card cardWide">
-              <div className="cardHeader">
-                <div className="cardTitle">{t.narrative}</div>
-              </div>
-
-              <div
-                className="reportBox2"
-                dir={isRTL ? "rtl" : "ltr"}
-                style={{
-                  whiteSpace: "pre-wrap",
-                  lineHeight: 1.8,
-                  padding: 12,
-                  borderRadius: 12,
-                  minHeight: 180,
-                }}
-              >
-                {reportText || t.empty}
-              </div>
-
-              {!reportText ? (
-                <div className="muted" style={{ marginTop: 8 }}>
-                  {t.insufficient}
+                  <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                    {profile.byNationality.map((x, idx) => (
+                      <div key={idx} className="miniRow">
+                        <div className="miniKey">{x.nationality || "—"}</div>
+                        <div className="miniVal">
+                          {x.n} • {fmtPct(x.lowRate ?? x.highRate)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : null}
+
+              {/* Insight */}
+              {insightText ? (
+                <div
+                  className="reportBox2"
+                  style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }}
+                  dir={isRTL ? "rtl" : "ltr"}
+                >
+                  {insightText}
+                </div>
+              ) : null}
             </div>
-          </>
-        )}
+          )}
+        </div>
+
+        {/* Narrative */}
+        <div className="card cardWide">
+          <div className="cardHeader">
+            <div className="cardTitle">{t.narrative}</div>
+          </div>
+
+          <div
+            className="reportBox2"
+            dir={isRTL ? "rtl" : "ltr"}
+            style={{
+              whiteSpace: "pre-wrap",
+              lineHeight: 1.8,
+              padding: 12,
+              borderRadius: 12,
+              minHeight: 180,
+            }}
+          >
+            {reportText || t.empty}
+          </div>
+
+          {!reportText ? <div className="muted" style={{ marginTop: 8 }}>{t.insufficient}</div> : null}
+        </div>
       </section>
     </div>
   );

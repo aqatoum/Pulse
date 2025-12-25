@@ -1,16 +1,14 @@
 const express = require("express");
 const LabResult = require("../models/LabResult");
 
-const { computeAnemiaEwma } = require("../services/analytics/ewma.service");
-const { computeAnemiaCusum } = require("../services/analytics/cusum.service");
-const { computeAnemiaFarrington } = require("../services/analytics/farrington.service");
-const { computeAnemiaProfile } = require("../services/analytics/profile.service");
+const { computeSignalEwma, computeAnemiaEwma } = require("../services/analytics/ewma.service");
+const { computeSignalCusum, computeAnemiaCusum } = require("../services/analytics/cusum.service");
+const { computeSignalFarrington, computeAnemiaFarrington } = require("../services/analytics/farrington.service");
+
+const { computeSignalProfile, computeAnemiaProfile } = require("../services/analytics/profile.service");
 const { buildReport } = require("../services/analytics/report.service");
 
-const {
-  buildConsensus,
-  buildSignatureInsight,
-} = require("../services/analytics/consensus.service");
+const { buildConsensus, buildSignatureInsight } = require("../services/analytics/consensus.service");
 
 const { apiOk, apiError } = require("../utils/response");
 const ANALYTICS_DEFAULTS = require("../config/analytics.defaults");
@@ -87,16 +85,30 @@ function normalizeLang(lang, fallback = "both") {
   return fallback;
 }
 
+function normCode(x) {
+  return String(x || "").trim().toUpperCase();
+}
+
 /* ===============================
-   Scope (facility/region/lab)
+   Scope (GLOBAL / facility / region / lab)
    =============================== */
 function getScope(req) {
   const facilityId = String(req.query.facilityId || "").trim();
   const regionId = String(req.query.regionId || "").trim();
   const labId = String(req.query.labId || "").trim();
 
-  if (!facilityId && !regionId) {
-    return { ok: false, error: "facilityId or regionId is required" };
+  // ✅ GLOBAL allowed
+  if (!facilityId && !regionId && !labId) {
+    return {
+      ok: true,
+      scope: {
+        facilityId: null,
+        regionId: null,
+        labId: null,
+        scopeType: "GLOBAL",
+        scopeId: "GLOBAL",
+      },
+    };
   }
 
   return {
@@ -105,8 +117,8 @@ function getScope(req) {
       facilityId: facilityId || null,
       regionId: regionId || null,
       labId: labId || null,
-      scopeType: facilityId ? "FACILITY" : "REGION",
-      scopeId: facilityId ? facilityId : regionId,
+      scopeType: facilityId ? "FACILITY" : regionId ? "REGION" : "LAB",
+      scopeId: facilityId || regionId || labId,
     },
   };
 }
@@ -196,7 +208,9 @@ function getAnemiaParams(req) {
         cfg.bounds.farrington.baselineWeeks.min,
         cfg.bounds.farrington.baselineWeeks.max
       ) ?? base.farrington.baselineWeeks,
-    z: clampNum(req.query.farringtonZ, cfg.bounds.farrington.z.min, cfg.bounds.farrington.z.max) ?? base.farrington.z,
+    z:
+      clampNum(req.query.farringtonZ, cfg.bounds.farrington.z.min, cfg.bounds.farrington.z.max) ??
+      base.farrington.z,
   };
 
   return { preset, locked: false, ewma, cusum, farrington };
@@ -216,41 +230,126 @@ function pickInterpretationForConsensus(interpretation, lang) {
 }
 
 /* ===============================
-   Response helper: add scope (FACILITY/REGION)
-   Keep facilityId for backward compatibility.
+   ✅ NEW: extract perMethod safely
+   - uses interpretation if present
+   - otherwise derives from results points
+   =============================== */
+function normalizeLevel(x, fallback = "info") {
+  const v = String(x || "").toLowerCase();
+  if (v === "alert" || v === "watch" || v === "info") return v;
+  // sometimes services return "warning"/"warn"
+  if (v === "warning" || v === "warn") return "watch";
+  return fallback;
+}
+function normalizeConfidence(x, fallback = "low") {
+  const v = String(x || "").toLowerCase();
+  if (v === "high" || v === "medium" || v === "low") return v;
+  if (v === "med") return "medium";
+  return fallback;
+}
+
+// tries to pull { alertLevel, confidenceLevel } from various interpretation shapes
+function extractMethodInterpretation(interpretation) {
+  if (!interpretation) return null;
+
+  // if already object with desired keys
+  if (typeof interpretation === "object") {
+    if (interpretation.alertLevel || interpretation.confidenceLevel) {
+      return {
+        alertLevel: normalizeLevel(interpretation.alertLevel),
+        confidenceLevel: normalizeConfidence(interpretation.confidenceLevel),
+      };
+    }
+    // sometimes nested like { en: { alertLevel... }, ar: { ... } }
+    if (interpretation.en && (interpretation.en.alertLevel || interpretation.en.confidenceLevel)) {
+      return {
+        alertLevel: normalizeLevel(interpretation.en.alertLevel),
+        confidenceLevel: normalizeConfidence(interpretation.en.confidenceLevel),
+      };
+    }
+  }
+
+  return null;
+}
+
+function deriveFromResult(resultObj, methodName) {
+  const pts = resultObj?.points;
+  const last = latest(pts);
+
+  // try common shapes
+  const hasAlert =
+    last?.alert === true ||
+    last?.isAlert === true ||
+    last?.flag === true ||
+    last?.alarm === true;
+
+  // some engines store "alertLevel" per point
+  const pointLevel = normalizeLevel(last?.alertLevel || last?.level || null, null);
+
+  // Farrington commonly uses UCL comparison, but we avoid heavy logic in routes.
+  const alertLevel = pointLevel || (hasAlert ? "alert" : "info");
+
+  // confidence: very rough heuristic based on point count
+  const nPts = Array.isArray(pts) ? pts.length : 0;
+  const confidenceLevel = nPts >= 12 ? "high" : nPts >= 4 ? "medium" : "low";
+
+  return { alertLevel, confidenceLevel };
+}
+
+function computeConsensusFromPerMethod(perMethod) {
+  const levels = Object.values(perMethod || {}).map((x) => normalizeLevel(x?.alertLevel, "info"));
+  const alertCount = levels.filter((l) => l === "alert").length;
+  const watchCount = levels.filter((l) => l === "watch").length;
+
+  let decision = "info";
+  if (alertCount > 0) decision = "alert";
+  else if (watchCount > 0) decision = "watch";
+
+  return {
+    decision,
+    counts: { alert: alertCount, watch: watchCount },
+    perMethod,
+  };
+}
+
+/* ===============================
+   Response helper: scope at top
    =============================== */
 function withScopeTop(scopeRes) {
   return {
     scope: {
-      type: scopeRes.scope.scopeType, // "FACILITY" | "REGION"
+      type: scopeRes.scope.scopeType, // GLOBAL | FACILITY | REGION | LAB
       id: scopeRes.scope.scopeId,
       labId: scopeRes.scope.labId || null,
       regionId: scopeRes.scope.regionId || null,
       facilityId: scopeRes.scope.facilityId || null,
     },
-    // backward compatibility: some frontends read facilityId
-    facilityId: scopeRes.scope.scopeId,
+    facilityId: scopeRes.scope.scopeId, // backward compatibility
   };
 }
 
 /* ===============================
-   Load HB rows then map -> legacy shape for services
-   Services expect: { hb, testDate, sex, ageYears }
-   ✅ يدعم dateFilter فعليًا
+   ✅ Load rows for ANY testCode
+   rows returned contain: { value, testDate, sex, ageYears, nationality, testCode }
    =============================== */
-async function loadAnemiaRows({ scope, dateFilter }) {
-  const hbCodes = ["HB", "HGB"];
+async function loadSignalRows({ scope, dateFilter, testCode }) {
+  const tc = normCode(testCode);
+  if (!tc)
+    return {
+      rows: [],
+      dateRange: { start: null, end: null, filtered: dateFilter?.forMeta || {} },
+      rawCount: 0,
+    };
 
   const q = {
     ...buildBaseQuery(scope),
-    testCode: { $in: hbCodes },
+    testCode: tc,
   };
 
   if (dateFilter?.start || dateFilter?.end) {
     const range = {};
     if (dateFilter.start) range.$gte = dateFilter.start;
     if (dateFilter.end) range.$lte = dateFilter.end;
-
     q.$or = [{ testDate: range }, { collectedAt: range }];
   }
 
@@ -262,6 +361,7 @@ async function loadAnemiaRows({ scope, dateFilter }) {
       collectedAt: 1,
       sex: 1,
       ageYears: 1,
+      nationality: 1,
       facilityId: 1,
       regionId: 1,
       labId: 1,
@@ -272,21 +372,21 @@ async function loadAnemiaRows({ scope, dateFilter }) {
 
   const rows = (docs || [])
     .map((r) => {
-      const hb = typeof r.value === "number" ? r.value : Number(r.value);
+      const v = typeof r.value === "number" ? r.value : Number(r.value);
       const dt = r.testDate || r.collectedAt || null;
-
       return {
-        hb,
+        testCode: r.testCode,
+        value: v,
         testDate: dt,
         sex: r.sex,
         ageYears: r.ageYears,
+        nationality: r.nationality || "unknown",
       };
     })
-    .filter((r) => r.testDate && Number.isFinite(r.hb));
+    .filter((r) => r.testDate && Number.isFinite(r.value));
 
   let min = null;
   let max = null;
-
   for (const r of rows) {
     const d = r?.testDate ? new Date(r.testDate) : null;
     if (!d || Number.isNaN(d.getTime())) continue;
@@ -318,6 +418,7 @@ function computeDataQuality({ profile, results }) {
   const recentN =
     latest(results?.ewma?.points)?.n ??
     latest(results?.cusum?.points)?.n ??
+    latest(results?.farrington?.points)?.n ??
     null;
 
   return {
@@ -330,29 +431,35 @@ function computeDataQuality({ profile, results }) {
 }
 
 /* ===============================
-   ✅ PROFILE — /api/analytics/anemia-profile
-   (هذا كان مفقود/مكسور بسبب تكرار router/module.exports)
+   ✅ PROFILE (generic via old endpoint)
+   /api/analytics/anemia-profile?signal=crp&testCode=CRP
    =============================== */
 router.get("/anemia-profile", async (req, res) => {
   try {
     const scopeRes = getScope(req);
-    if (!scopeRes.ok) {
-      return res.status(400).json(apiError({ status: 400, error: scopeRes.error }));
-    }
+    if (!scopeRes.ok) return res.status(400).json(apiError({ status: 400, error: scopeRes.error }));
 
     const lang = normalizeLang(req.query.lang, "both");
+    const signal = String(req.query.signal || "anemia").trim().toLowerCase();
+    const testCode = normCode(req.query.testCode || (signal === "anemia" ? "HB" : ""));
+
     const dateFilter = getDateRangeFilter(req);
+    const { rows, dateRange } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
 
-    const { rows, dateRange } = await loadAnemiaRows({ scope: scopeRes.scope, dateFilter });
+    const out =
+      signal === "anemia"
+        ? computeAnemiaProfile({ rows, lang })
+        : computeSignalProfile({ rows, signalType: signal, testCode, lang });
 
-    const out = computeAnemiaProfile({ rows, lang }); // out: { profile, insight }
     return res.json(
       apiOk({
         ...withScopeTop(scopeRes),
         analysis: {
-          signalType: "anemia",
+          signalType: signal,
           method: "PROFILE",
           params: {
+            signal,
+            testCode,
             lang,
             ...scopeRes.scope,
           },
@@ -372,145 +479,195 @@ router.get("/anemia-profile", async (req, res) => {
 });
 
 /* ===============================
-   EWMA
+   ✅ RUN — /api/analytics/run
    =============================== */
-router.get("/anemia-ewma", async (req, res) => {
+router.get("/run", async (req, res) => {
   try {
     const scopeRes = getScope(req);
     if (!scopeRes.ok) return res.status(400).json(apiError({ status: 400, error: scopeRes.error }));
 
     const lang = normalizeLang(req.query.lang, "both");
-    const params = getAnemiaParams(req);
+    const signal = String(req.query.signal || "anemia").trim().toLowerCase();
+    const testCode = normCode(req.query.testCode || (signal === "anemia" ? "HB" : ""));
+
+    const params = getAnemiaParams(req); // reuse same params for all signals
     const dateFilter = getDateRangeFilter(req);
 
-    const { rows, dateRange } = await loadAnemiaRows({ scope: scopeRes.scope, dateFilter });
+    const methodsRaw = String(req.query.methods || "ewma,cusum,farrington");
+    const methods = methodsRaw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter((x) => ["ewma", "cusum", "farrington"].includes(x));
 
-    const { ewma, interpretation } = computeAnemiaEwma({
-      rows,
-      ...params.ewma,
-      lang,
-      preset: params.preset,
-      timeRange: dateRange.filtered,
-    });
+    if (!methods.length) {
+      return res.status(400).json(apiError({ status: 400, error: "methods is required" }));
+    }
+
+    const { rows, dateRange } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
+
+    const results = {};
+    const interpretations = {};
+
+    for (const method of methods) {
+      if (method === "ewma") {
+        const fn = signal === "anemia" ? computeAnemiaEwma : computeSignalEwma;
+        const { ewma, interpretation } = fn({
+          rows,
+          signalType: signal,
+          testCode,
+          ...params.ewma,
+          lang,
+          preset: params.preset,
+          timeRange: dateRange.filtered,
+        });
+        results.ewma = ewma;
+        interpretations.ewma = pickInterpretationForConsensus(interpretation, lang);
+      }
+
+      if (method === "cusum") {
+        const fn = signal === "anemia" ? computeAnemiaCusum : computeSignalCusum;
+        const { cusum, interpretation } = fn({
+          rows,
+          signalType: signal,
+          testCode,
+          ...params.cusum,
+          lang,
+          preset: params.preset,
+          timeRange: dateRange.filtered,
+        });
+        results.cusum = cusum;
+        interpretations.cusum = pickInterpretationForConsensus(interpretation, lang);
+      }
+
+      if (method === "farrington") {
+        const fn = signal === "anemia" ? computeAnemiaFarrington : computeSignalFarrington;
+        const { farrington, interpretation } = fn({
+          rows,
+          signalType: signal,
+          testCode,
+          ...params.farrington,
+          lang,
+          preset: params.preset,
+          timeRange: dateRange.filtered,
+        });
+        results.farrington = farrington;
+        interpretations.farrington = pickInterpretationForConsensus(interpretation, lang);
+      }
+    }
+
+    // ✅ Profile (stratification)
+    const profOut =
+      signal === "anemia"
+        ? computeAnemiaProfile({ rows, lang: "both" })
+        : computeSignalProfile({ rows, signalType: signal, testCode, lang: "both" });
+
+    const profile = profOut?.profile || null;
+    const profileInsight = profOut?.insight || null;
+
+    // ✅ First consensus (keep your service)
+    let consensus = buildConsensus({ interpretations, methods });
+
+    // ✅ Signature Insight
+    const signatureInsight =
+      lang === "both"
+        ? {
+            ar: {
+              ...buildSignatureInsight({ signalType: signal, consensus, methods, language: "ar" }),
+              stratificationKeyFinding: profileInsight?.ar?.keyFinding ?? null,
+            },
+            en: {
+              ...buildSignatureInsight({ signalType: signal, consensus, methods, language: "en" }),
+              stratificationKeyFinding: profileInsight?.en?.keyFinding ?? null,
+            },
+          }
+        : {
+            ...buildSignatureInsight({ signalType: signal, consensus, methods, language: lang }),
+            stratificationKeyFinding: profileInsight?.en?.keyFinding ?? null,
+          };
+
+    const dataQuality = computeDataQuality({ profile, results });
+
+    // ==========================
+    // ✅ FIX #1: ensure consensus.perMethod is filled
+    // ==========================
+    const perMethod = {};
+    for (const method of methods) {
+      const interp = extractMethodInterpretation(interpretations?.[method]);
+      if (interp) {
+        perMethod[method] = interp;
+      } else {
+        const r = results?.[method];
+        perMethod[method] = deriveFromResult(r, method);
+      }
+    }
+
+    // if consensus service returned empty perMethod, overwrite with ours
+    const computedConsensus = computeConsensusFromPerMethod(perMethod);
+
+    // keep original consensus if it contains extra fields, but force perMethod + counts + decision to be consistent
+    consensus = {
+      ...(consensus || {}),
+      decision: computedConsensus.decision,
+      counts: computedConsensus.counts,
+      perMethod: computedConsensus.perMethod,
+    };
+
+    // ==========================
+    // ✅ FIX #2: data quality note ALWAYS when data insufficient
+    // ==========================
+    const notEnoughData = (dataQuality?.overallN ?? 0) < 20 || (dataQuality?.weeksCoverage ?? 0) < 4;
+
+    if (notEnoughData) {
+      const noteAr =
+        "ملاحظة جودة: حجم العينة أو التغطية الزمنية غير كافيين للحكم بثقة عالية. اعتبر النتيجة استرشادية حتى تتوفر بيانات أكثر.";
+      const noteEn =
+        "Data quality note: sample size or time coverage is insufficient for high-confidence inference. Treat this as indicative until more data are available.";
+
+      if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr;
+      if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn;
+    }
+
+    // still keep downgrade rule only if ALERT (optional extra safety)
+    if (notEnoughData && String(consensus?.decision || "").toLowerCase() === "alert") {
+      consensus.decision = "watch";
+      const noteAr2 =
+        "ملاحظة جودة: تم تخفيض القرار من ALERT إلى WATCH لأن البيانات غير كافية لإنذار موثوق.";
+      const noteEn2 =
+        "Data quality note: Decision was downgraded from ALERT to WATCH due to insufficient data for a reliable alert.";
+      if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr2;
+      if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn2;
+    }
 
     return res.json(
       apiOk({
         ...withScopeTop(scopeRes),
         analysis: {
-          signalType: "anemia",
-          method: "EWMA",
+          signalType: signal,
+          method: "RUN",
           params: {
-            ...params.ewma,
-            preset: params.preset,
-            advanced: String(req.query.advanced || "0") === "1",
+            signal,
+            testCode,
+            methods,
             lang,
             ...scopeRes.scope,
+            preset: params.preset,
+            advanced: String(req.query.advanced || "0") === "1",
             locked: params.locked,
           },
           dateRange,
         },
-        data: { ewma, dateRange },
-        interpretation,
-      })
-    );
-  } catch (err) {
-    console.error("EWMA error:", err);
-    return res.status(500).json(apiError({ status: 500, error: "Server error", details: err.message }));
-  }
-});
-
-/* ===============================
-   CUSUM
-   =============================== */
-router.get("/anemia-cusum", async (req, res) => {
-  try {
-    const scopeRes = getScope(req);
-    if (!scopeRes.ok) return res.status(400).json(apiError({ status: 400, error: scopeRes.error }));
-
-    const lang = normalizeLang(req.query.lang, "both");
-    const params = getAnemiaParams(req);
-    const dateFilter = getDateRangeFilter(req);
-
-    const { rows, dateRange } = await loadAnemiaRows({ scope: scopeRes.scope, dateFilter });
-
-    const { cusum, interpretation } = computeAnemiaCusum({
-      rows,
-      ...params.cusum,
-      lang,
-      preset: params.preset,
-      timeRange: dateRange.filtered,
-    });
-
-    return res.json(
-      apiOk({
-        ...withScopeTop(scopeRes),
-        analysis: {
-          signalType: "anemia",
-          method: "CUSUM",
-          params: {
-            ...params.cusum,
-            preset: params.preset,
-            advanced: String(req.query.advanced || "0") === "1",
-            lang,
-            ...scopeRes.scope,
-            locked: params.locked,
-          },
-          dateRange,
+        data: {
+          consensus,
+          signatureInsight,
+          results,
+          profile,
+          profileInsight,
+          meta: { dataQuality, dateRange },
         },
-        data: { cusum, dateRange },
-        interpretation,
       })
     );
   } catch (err) {
-    console.error("CUSUM error:", err);
-    return res.status(500).json(apiError({ status: 500, error: "Server error", details: err.message }));
-  }
-});
-
-/* ===============================
-   FARRINGTON
-   =============================== */
-router.get("/anemia-farrington", async (req, res) => {
-  try {
-    const scopeRes = getScope(req);
-    if (!scopeRes.ok) return res.status(400).json(apiError({ status: 400, error: scopeRes.error }));
-
-    const lang = normalizeLang(req.query.lang, "both");
-    const params = getAnemiaParams(req);
-    const dateFilter = getDateRangeFilter(req);
-
-    const { rows, dateRange } = await loadAnemiaRows({ scope: scopeRes.scope, dateFilter });
-
-    const { farrington, interpretation } = computeAnemiaFarrington({
-      rows,
-      ...params.farrington,
-      lang,
-      preset: params.preset,
-      timeRange: dateRange.filtered,
-    });
-
-    return res.json(
-      apiOk({
-        ...withScopeTop(scopeRes),
-        analysis: {
-          signalType: "anemia",
-          method: "FARRINGTON",
-          params: {
-            ...params.farrington,
-            preset: params.preset,
-            advanced: String(req.query.advanced || "0") === "1",
-            lang,
-            ...scopeRes.scope,
-            locked: params.locked,
-          },
-          dateRange,
-        },
-        data: { farrington, dateRange },
-        interpretation,
-      })
-    );
-  } catch (err) {
-    console.error("FARRINGTON error:", err);
+    console.error("RUN error:", err);
     return res.status(500).json(apiError({ status: 500, error: "Server error", details: err.message }));
   }
 });
@@ -524,6 +681,9 @@ router.get("/report", async (req, res) => {
     if (!scopeRes.ok) return res.status(400).json(apiError({ status: 400, error: scopeRes.error }));
 
     const lang = normalizeLang(req.query.lang, "both");
+    const signal = String(req.query.signal || "anemia").trim().toLowerCase();
+    const testCode = normCode(req.query.testCode || (signal === "anemia" ? "HB" : ""));
+
     const params = getAnemiaParams(req);
     const dateFilter = getDateRangeFilter(req);
 
@@ -533,17 +693,20 @@ router.get("/report", async (req, res) => {
       .map((s) => s.trim().toLowerCase())
       .filter((x) => ["ewma", "cusum", "farrington"].includes(x));
 
-    const { rows, dateRange } = await loadAnemiaRows({ scope: scopeRes.scope, dateFilter });
+    const { rows, dateRange } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
 
     const results = {};
     const interpretationsForConsensus = {};
 
     for (const method of methods) {
       if (method === "ewma") {
-        const { ewma, interpretation } = computeAnemiaEwma({
+        const fn = signal === "anemia" ? computeAnemiaEwma : computeSignalEwma;
+        const { ewma, interpretation } = fn({
           rows,
-          lang,
+          signalType: signal,
+          testCode,
           ...params.ewma,
+          lang,
           preset: params.preset,
           timeRange: dateRange.filtered,
         });
@@ -552,10 +715,13 @@ router.get("/report", async (req, res) => {
       }
 
       if (method === "cusum") {
-        const { cusum, interpretation } = computeAnemiaCusum({
+        const fn = signal === "anemia" ? computeAnemiaCusum : computeSignalCusum;
+        const { cusum, interpretation } = fn({
           rows,
-          lang,
+          signalType: signal,
+          testCode,
           ...params.cusum,
+          lang,
           preset: params.preset,
           timeRange: dateRange.filtered,
         });
@@ -564,10 +730,13 @@ router.get("/report", async (req, res) => {
       }
 
       if (method === "farrington") {
-        const { farrington, interpretation } = computeAnemiaFarrington({
+        const fn = signal === "anemia" ? computeAnemiaFarrington : computeSignalFarrington;
+        const { farrington, interpretation } = fn({
           rows,
-          lang,
+          signalType: signal,
+          testCode,
           ...params.farrington,
+          lang,
           preset: params.preset,
           timeRange: dateRange.filtered,
         });
@@ -578,30 +747,47 @@ router.get("/report", async (req, res) => {
 
     const consensus = buildConsensus({ interpretations: interpretationsForConsensus, methods });
 
-    const { profile, insight: profileInsight } = computeAnemiaProfile({ rows, lang: "both" });
+    const profOut =
+      signal === "anemia"
+        ? computeAnemiaProfile({ rows, lang: "both" })
+        : computeSignalProfile({ rows, signalType: signal, testCode, lang: "both" });
+
+    const profile = profOut?.profile || null;
+    const profileInsight = profOut?.insight || null;
 
     const signatureInsight =
       lang === "both"
         ? {
             ar: {
-              ...buildSignatureInsight({ signalType: "anemia", consensus, methods, language: "ar" }),
+              ...buildSignatureInsight({ signalType: signal, consensus, methods, language: "ar" }),
               stratificationKeyFinding: profileInsight?.ar?.keyFinding ?? null,
             },
             en: {
-              ...buildSignatureInsight({ signalType: "anemia", consensus, methods, language: "en" }),
+              ...buildSignatureInsight({ signalType: signal, consensus, methods, language: "en" }),
               stratificationKeyFinding: profileInsight?.en?.keyFinding ?? null,
             },
           }
         : {
-            ...buildSignatureInsight({ signalType: "anemia", consensus, methods, language: lang }),
+            ...buildSignatureInsight({ signalType: signal, consensus, methods, language: lang }),
             stratificationKeyFinding: profileInsight?.en?.keyFinding ?? null,
           };
 
     const dataQuality = computeDataQuality({ profile, results });
 
+    // ✅ add note in report too (same logic)
+    const notEnoughData = (dataQuality?.overallN ?? 0) < 20 || (dataQuality?.weeksCoverage ?? 0) < 4;
+    if (notEnoughData) {
+      const noteAr =
+        "ملاحظة جودة: حجم العينة أو التغطية الزمنية غير كافيين للحكم بثقة عالية. اعتبر النتيجة استرشادية حتى تتوفر بيانات أكثر.";
+      const noteEn =
+        "Data quality note: sample size or time coverage is insufficient for high-confidence inference. Treat this as indicative until more data are available.";
+      if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr;
+      if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn;
+    }
+
     const built = buildReport({
       facilityId: scopeRes.scope.scopeId,
-      signalType: "anemia",
+      signalType: signal,
       methods,
       consensus,
       signatureInsight,
@@ -625,16 +811,17 @@ router.get("/report", async (req, res) => {
       apiOk({
         ...withScopeTop(scopeRes),
         analysis: {
-          signalType: "anemia",
+          signalType: signal,
           method: "REPORT",
           params: {
+            signal,
+            testCode,
             methods,
             lang,
             ...scopeRes.scope,
             locked: params.locked,
             preset: params.preset,
             advanced: String(req.query.advanced || "0") === "1",
-            tunedDefaults: params,
           },
           dateRange,
         },
@@ -648,132 +835,6 @@ router.get("/report", async (req, res) => {
     );
   } catch (err) {
     console.error("REPORT error:", err);
-    return res.status(500).json(apiError({ status: 500, error: "Server error", details: err.message }));
-  }
-});
-
-/* ===============================
-   RUN — /api/analytics/run
-   =============================== */
-router.get("/run", async (req, res) => {
-  try {
-    const scopeRes = getScope(req);
-    if (!scopeRes.ok) return res.status(400).json(apiError({ status: 400, error: scopeRes.error }));
-
-    const signal = String(req.query.signal || "anemia").trim().toLowerCase();
-    if (signal !== "anemia") {
-      return res.status(400).json(apiError({ status: 400, error: "Only signal=anemia is supported currently" }));
-    }
-
-    const lang = normalizeLang(req.query.lang, "both");
-    const params = getAnemiaParams(req);
-    const dateFilter = getDateRangeFilter(req);
-
-    const methodsRaw = String(req.query.methods || "ewma,cusum,farrington");
-    const methods = methodsRaw
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter((x) => ["ewma", "cusum", "farrington"].includes(x));
-
-    if (!methods.length) {
-      return res.status(400).json(apiError({ status: 400, error: "methods is required" }));
-    }
-
-    const { rows, dateRange } = await loadAnemiaRows({ scope: scopeRes.scope, dateFilter });
-
-    const results = {};
-    const interpretations = {};
-
-    for (const method of methods) {
-      if (method === "ewma") {
-        const { ewma, interpretation } = computeAnemiaEwma({
-          rows,
-          ...params.ewma,
-          lang,
-          preset: params.preset,
-          timeRange: dateRange.filtered,
-        });
-        results.ewma = ewma;
-        interpretations.ewma = pickInterpretationForConsensus(interpretation, lang);
-      }
-
-      if (method === "cusum") {
-        const { cusum, interpretation } = computeAnemiaCusum({
-          rows,
-          ...params.cusum,
-          lang,
-          preset: params.preset,
-          timeRange: dateRange.filtered,
-        });
-        results.cusum = cusum;
-        interpretations.cusum = pickInterpretationForConsensus(interpretation, lang);
-      }
-
-      if (method === "farrington") {
-        const { farrington, interpretation } = computeAnemiaFarrington({
-          rows,
-          ...params.farrington,
-          lang,
-          preset: params.preset,
-          timeRange: dateRange.filtered,
-        });
-        results.farrington = farrington;
-        interpretations.farrington = pickInterpretationForConsensus(interpretation, lang);
-      }
-    }
-
-    const consensus = buildConsensus({ interpretations, methods });
-
-    const { profile, insight: profileInsight } = computeAnemiaProfile({ rows, lang: "both" });
-
-    const signatureInsight =
-      lang === "both"
-        ? {
-            ar: {
-              ...buildSignatureInsight({ signalType: "anemia", consensus, methods, language: "ar" }),
-              stratificationKeyFinding: profileInsight?.ar?.keyFinding ?? null,
-            },
-            en: {
-              ...buildSignatureInsight({ signalType: "anemia", consensus, methods, language: "en" }),
-              stratificationKeyFinding: profileInsight?.en?.keyFinding ?? null,
-            },
-          }
-        : {
-            ...buildSignatureInsight({ signalType: "anemia", consensus, methods, language: lang }),
-            stratificationKeyFinding: profileInsight?.en?.keyFinding ?? null,
-          };
-
-    const dataQuality = computeDataQuality({ profile, results });
-
-    return res.json(
-      apiOk({
-        ...withScopeTop(scopeRes),
-        analysis: {
-          signalType: "anemia",
-          method: "RUN",
-          params: {
-            signal,
-            methods,
-            lang,
-            ...scopeRes.scope,
-            preset: params.preset,
-            advanced: String(req.query.advanced || "0") === "1",
-            locked: params.locked,
-          },
-          dateRange,
-        },
-        data: {
-          consensus,
-          signatureInsight,
-          results,
-          profile,
-          profileInsight,
-          meta: { dataQuality, dateRange },
-        },
-      })
-    );
-  } catch (err) {
-    console.error("RUN error:", err);
     return res.status(500).json(apiError({ status: 500, error: "Server error", details: err.message }));
   }
 });

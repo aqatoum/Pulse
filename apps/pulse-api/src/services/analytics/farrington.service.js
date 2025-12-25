@@ -1,312 +1,215 @@
-"use strict";
+const dayjs = require("dayjs");
+const isoWeek = require("dayjs/plugin/isoWeek");
+dayjs.extend(isoWeek);
 
-const { generateInterpretation } = require("./interpretation.service");
-const ANALYTICS_DEFAULTS = require("../../config/analytics.defaults");
+const CLINICAL = require("../../config/clinical.thresholds");
 
-/* =========================
-   ISO Week helpers
-   ========================= */
-function weekKey(dateLike) {
-  const date = new Date(dateLike);
-  if (Number.isNaN(date.getTime())) return null;
-
-  // ISO week (UTC)
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-
-  const y = d.getUTCFullYear();
-  const w = String(weekNo).padStart(2, "0");
-  return `${y}-W${w}`;
+// ===== Helpers =====
+function normCode(x) {
+  return String(x || "").trim().toUpperCase();
 }
 
-function parseWeekKey(wk) {
-  const m = /^(\d{4})-W(\d{2})$/.exec(String(wk || ""));
-  if (!m) return null;
-  return { year: Number(m[1]), week: Number(m[2]) };
+function pickBand(bands, ageYears) {
+  const a = typeof ageYears === "number" ? ageYears : Number(ageYears);
+  if (!Number.isFinite(a)) return null;
+  return (bands || []).find((b) => a >= b.min && a <= b.max) || null;
 }
 
-function sortWeekKeyAsc(a, b) {
-  // string sort works for YYYY-W## format
-  return String(a.week).localeCompare(String(b.week));
-}
-
-/* =========================
-   Clinical threshold (Hb)
-   ========================= */
 function anemiaThresholdHb(ageYears, sex) {
   const age = typeof ageYears === "number" && Number.isFinite(ageYears) ? ageYears : null;
   const s = String(sex || "U").toUpperCase();
-
-  // Keep your current rules (can be replaced by WHO table later)
-  let threshold = 11.0;
-  if (age !== null && age >= 5 && age <= 14) threshold = 11.5;
-  if (age !== null && age >= 15 && s === "F") threshold = 12.0;
-  if (age !== null && age >= 15 && s === "M") threshold = 13.0;
-
-  return threshold;
+  if (age !== null && age >= 5 && age <= 14) return 11.5;
+  if (age !== null && age >= 15) {
+    if (s === "F") return 12.0;
+    if (s === "M") return 13.0;
+    return 11.5;
+  }
+  return 11.0;
 }
 
-/* =========================
-   Farrington bounds & defaults
-   ========================= */
-function getFarringtonDefaults() {
-  const d = ANALYTICS_DEFAULTS?.anemia?.farrington || {};
+function buildCaseDef({ signalType, testCode }) {
+  const st = String(signalType || "").toLowerCase();
+  const tc = normCode(testCode);
+
+  if (st === "anemia" || tc === "HB" || tc === "HGB") {
+    return {
+      direction: "low",
+      isCase: (value, row) => value < anemiaThresholdHb(row?.ageYears, row?.sex),
+    };
+  }
+
+  const cfg = CLINICAL?.[tc] || null;
+  if (!cfg) return null;
+
+  const dir = String(cfg.direction || "high").toLowerCase() === "low" ? "low" : "high";
+
   return {
-    // fallback moving baseline
-    baselineWeeks: d?.baselineWeeks ?? 8,
-
-    // threshold multiplier
-    z: d?.z ?? 2.0,
-
-    // seasonal baseline:
-    // use previous years same week ± windowWeeks
-    yearsBack: d?.yearsBack ?? 2,
-    windowWeeks: d?.windowWeeks ?? 2,
-
-    // minimum baseline points before calculating (otherwise keep alert=false)
-    minBaselinePoints: d?.minBaselinePoints ?? 6,
-
-    // minimum mean to avoid degenerate UCL when mean=0
-    meanFloor: d?.meanFloor ?? 0.1,
-
-    // max phi to avoid insane thresholds when data are very noisy
-    phiMax: d?.phiMax ?? 5.0,
+    direction: dir,
+    isCase: (value, row) => {
+      const band = pickBand(cfg.bands, row?.ageYears);
+      if (!band) return false;
+      if (dir === "high") {
+        const u = typeof band.upper === "number" ? band.upper : null;
+        if (u == null) return false;
+        return value > u;
+      }
+      const l = typeof band.lower === "number" ? band.lower : null;
+      if (l == null) return false;
+      return value < l;
+    },
   };
 }
 
-function toFiniteNumber(x) {
-  const v = typeof x === "number" ? x : Number(x);
-  return Number.isFinite(v) ? v : null;
+function getWeekKey(d) {
+  const x = dayjs(d);
+  const y = x.isoWeekYear();
+  const w = String(x.isoWeek()).padStart(2, "0");
+  return `${y}-W${w}`;
 }
 
-function clampNum(x, min, max) {
-  const v = toFiniteNumber(x);
-  if (v === null) return null;
-  return Math.max(min, Math.min(max, v));
+function safeNum(v) {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
-function clampInt(x, min, max) {
-  const v = parseInt(String(x), 10);
-  if (!Number.isFinite(v)) return null;
-  return Math.max(min, Math.min(max, v));
+function extractValue(row) {
+  const v = safeNum(row?.value);
+  if (v != null) return v;
+  const hb = safeNum(row?.hb);
+  if (hb != null) return hb;
+  return null;
 }
 
-/* =========================
-   Stats helpers
-   ========================= */
 function mean(arr) {
-  if (!arr?.length) return 0;
+  if (!arr.length) return null;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
-function variance(arr) {
-  if (!arr || arr.length < 2) return 0;
-  const m = mean(arr);
-  const v = arr.reduce((s, x) => s + (x - m) * (x - m), 0) / (arr.length - 1);
-  return v;
-}
-
-// UCL with over-dispersion (quasi-poisson style):
-// UCL = mu + z * sqrt(phi * mu)
-function uclQuasiPoisson(mu, phi, z) {
-  const m = Math.max(0, mu);
-  const p = Math.max(1, phi);
-  return m + z * Math.sqrt(p * m);
-}
-
-// week distance on a circular 1..53 scale (approx; good enough for windowing)
-function weekDistance(a, b) {
-  const da = Number(a), db = Number(b);
-  if (!Number.isFinite(da) || !Number.isFinite(db)) return 999;
-  const diff = Math.abs(da - db);
-  return Math.min(diff, 53 - diff);
-}
-
-/* =========================
-   Build weekly series from rows
-   rows expected: { hb, testDate, sex, ageYears }
-   ========================= */
-function buildWeeklyCounts(rows) {
-  const buckets = new Map();
-
-  for (const r of rows || []) {
-    const hb = toFiniteNumber(r?.hb);
-    const dt = r?.testDate ? new Date(r.testDate) : null;
-    if (!dt || Number.isNaN(dt.getTime()) || hb === null) continue;
-
-    const wk = weekKey(dt);
-    if (!wk) continue;
-
-    if (!buckets.has(wk)) buckets.set(wk, { week: wk, low: 0, n: 0 });
-
-    const b = buckets.get(wk);
-    b.n++;
-
-    const thr = anemiaThresholdHb(r.ageYears, r.sex);
-    if (hb < thr) b.low++;
-  }
-
-  return Array.from(buckets.values()).sort(sortWeekKeyAsc);
-}
-
-/* =========================
-   Seasonal baseline selection
-   ========================= */
-function pickSeasonalBaseline(seriesByWeekKey, currentWeekKey, yearsBack, windowWeeks) {
-  const cur = parseWeekKey(currentWeekKey);
-  if (!cur) return [];
-
-  const values = [];
-  for (const [wk, item] of seriesByWeekKey.entries()) {
-    const p = parseWeekKey(wk);
-    if (!p) continue;
-
-    const yearDiff = cur.year - p.year;
-    if (yearDiff <= 0 || yearDiff > yearsBack) continue;
-
-    // same-ish week number ± window
-    const dist = weekDistance(cur.week, p.week);
-    if (dist <= windowWeeks) values.push(item.low);
-  }
-  return values;
-}
-
-function pickMovingBaseline(series, idx, baselineWeeks) {
-  const slice = series.slice(Math.max(0, idx - baselineWeeks), idx);
-  return slice.map((x) => x.low);
-}
-
-/* =========================
-   Main
-   ========================= */
-function computeAnemiaFarrington({
+/**
+ * ✅ Simplified Farrington-like:
+ * - compute weekly CASE counts (not rates)
+ * - baseline expected = mean of historic counts (weeksBack window)
+ * - UCL = expected + z*sqrt(expected) (Poisson-ish)
+ *
+ * This keeps your current output shape and "baselineUsed" behavior.
+ */
+function computeSignalFarrington({
   rows,
-  baselineWeeks: baselineWeeks_in,
-  z: z_in,
-  yearsBack: yearsBack_in,
-  windowWeeks: windowWeeks_in,
-  minBaselinePoints: minBaselinePoints_in,
+  signalType = "anemia",
+  testCode = "HB",
+  baselineWeeks = 8,
+  z = 2.0,
   lang = "both",
-} = {}) {
-  const d = getFarringtonDefaults();
-
-  const baselineWeeks = clampInt(baselineWeeks_in, 2, 52) ?? d.baselineWeeks;
-  const z = clampNum(z_in, 1.0, 4.0) ?? d.z;
-
-  const yearsBack = clampInt(yearsBack_in, 1, 10) ?? d.yearsBack;
-  const windowWeeks = clampInt(windowWeeks_in, 0, 8) ?? d.windowWeeks;
-
-  const minBaselinePoints = clampInt(minBaselinePoints_in, 3, 20) ?? d.minBaselinePoints;
-
-  const series = buildWeeklyCounts(rows);
-
-  if (!series.length) {
+  preset = "standard",
+  timeRange = null,
+}) {
+  const caseDef = buildCaseDef({ signalType, testCode });
+  if (!caseDef) {
     return {
       farrington: {
         baselineWeeks,
         z,
-        yearsBack,
-        windowWeeks,
-        minBaselinePoints,
+        yearsBack: 2,
+        windowWeeks: 2,
+        minBaselinePoints: 6,
+        direction: null,
+        testCode: normCode(testCode),
         points: [],
       },
-      interpretation: null,
+      interpretation:
+        lang === "both"
+          ? { ar: "لا توجد عتبات سريرية معرفة لهذا الفحص بعد.", en: "No clinical thresholds defined for this test yet." }
+          : lang === "ar"
+          ? "لا توجد عتبات سريرية معرفة لهذا الفحص بعد."
+          : "No clinical thresholds defined for this test yet.",
     };
   }
 
-  // index for fast lookups
-  const seriesByWeekKey = new Map(series.map((x) => [x.week, x]));
+  // weekly counts
+  const byWeek = new Map();
+  for (const r of rows || []) {
+    const dt = r?.testDate || r?.collectedAt;
+    if (!dt) continue;
 
-  const points = [];
+    const rowCode = r?.testCode ? normCode(r.testCode) : null;
+    if (rowCode && normCode(testCode) && rowCode !== normCode(testCode)) continue;
 
-  for (let i = 0; i < series.length; i++) {
-    const cur = series[i];
+    const v = extractValue(r);
+    if (v == null) continue;
 
-    // 1) seasonal baseline
-    let base = pickSeasonalBaseline(seriesByWeekKey, cur.week, yearsBack, windowWeeks);
+    const wk = getWeekKey(dt);
+    if (!byWeek.has(wk)) byWeek.set(wk, { n: 0, cases: 0 });
+    const g = byWeek.get(wk);
 
-    // 2) fallback: moving baseline if seasonal is too small
-    if (base.length < minBaselinePoints) {
-      const moving = pickMovingBaseline(series, i, baselineWeeks);
-      // merge (dedupe not needed; they are different weeks)
-      base = base.concat(moving);
-    }
-
-    // If still not enough baseline -> compute but do NOT alert (avoid nonsense)
-    const baselineUsed = base.length;
-
-    let mu = mean(base);
-    mu = Math.max(mu, d.meanFloor);
-
-    let v = variance(base);
-    // quasi-poisson overdispersion
-    let phi = mu > 0 ? v / mu : 1;
-    if (!Number.isFinite(phi) || phi < 1) phi = 1;
-    if (phi > d.phiMax) phi = d.phiMax;
-
-    const UCL = uclQuasiPoisson(mu, phi, z);
-
-    const alert = baselineUsed >= minBaselinePoints ? cur.low > UCL : false;
-
-    points.push({
-      week: cur.week,
-      n: cur.n,
-      low: cur.low,
-      expected: Number(mu.toFixed(2)),
-      phi: Number(phi.toFixed(2)),
-      UCL: Number(UCL.toFixed(2)),
-      baselineUsed,
-      alert,
-    });
+    g.n += 1;
+    if (caseDef.isCase(v, r)) g.cases += 1;
   }
 
-  const last = points[points.length - 1];
+  const weeks = Array.from(byWeek.keys()).sort();
+  const series = weeks.map((wk) => {
+    const g = byWeek.get(wk);
+    return { week: wk, n: g.n, cases: g.cases };
+  });
 
-  const interpretation =
-    String(lang || "both").toLowerCase() === "both"
-      ? {
-          ar: generateInterpretation({
-            language: "ar",
-            signalType: "anemia",
-            method: "FARRINGTON",
-            lastZ: last.low, // observed
-            UCL: last.UCL,
-            points,
-            recentN: last.n,
-          }),
-          en: generateInterpretation({
-            language: "en",
-            signalType: "anemia",
-            method: "FARRINGTON",
-            lastZ: last.low, // observed
-            UCL: last.UCL,
-            points,
-            recentN: last.n,
-          }),
-        }
-      : generateInterpretation({
-          language: String(lang || "en").toLowerCase(),
-          signalType: "anemia",
-          method: "FARRINGTON",
-          lastZ: last.low,
-          UCL: last.UCL,
-          points,
-          recentN: last.n,
-        });
+  const points = series.map((cur, idx) => {
+    const start = Math.max(0, idx - baselineWeeks);
+    const base = series.slice(start, idx).map((p) => p.cases);
+    const expected = mean(base) ?? 0.1;
+    const UCL = expected + z * Math.sqrt(Math.max(expected, 0));
+    const alert = idx > 0 ? cur.cases > UCL : false;
+
+    return {
+      week: cur.week,
+      n: cur.n,
+      low: caseDef.direction === "low" ? cur.cases : 0,
+      high: caseDef.direction === "high" ? cur.cases : 0,
+      expected: Number(expected.toFixed(2)),
+      phi: 1,
+      UCL: Number(UCL.toFixed(2)),
+      baselineUsed: base.length,
+      alert,
+    };
+  });
+
+  const last = points[points.length - 1] || null;
+
+  const interpEn =
+    !points.length
+      ? `No data available for ${normCode(testCode)}.`
+      : `Farrington-style check on weekly ${caseDef.direction.toUpperCase()} cases for ${normCode(
+          testCode
+        )}. Latest week ${last.week}: cases=${caseDef.direction === "high" ? last.high : last.low}, UCL=${
+          last.UCL
+        }, alert=${last.alert ? "YES" : "NO"}.`;
+
+  const interpAr =
+    !points.length
+      ? `لا توجد بيانات للفحص ${normCode(testCode)}.`
+      : `تم فحص Farrington (مبسّط) لعدد الحالات (${caseDef.direction === "high" ? "مرتفع" : "منخفض"}) أسبوعيًا للفحص ${normCode(
+          testCode
+        )}. آخر أسبوع ${last.week}: الحالات=${caseDef.direction === "high" ? last.high : last.low}، الحد الأعلى ${
+          last.UCL
+        }، إنذار=${last.alert ? "نعم" : "لا"}.`;
 
   return {
     farrington: {
       baselineWeeks,
       z,
-      yearsBack,
-      windowWeeks,
-      minBaselinePoints,
+      yearsBack: 2,
+      windowWeeks: 2,
+      minBaselinePoints: 6,
+      direction: caseDef.direction,
+      testCode: normCode(testCode),
       points,
     },
-    interpretation,
+    interpretation:
+      lang === "both" ? { ar: interpAr, en: interpEn } : lang === "ar" ? interpAr : interpEn,
   };
 }
 
-module.exports = { computeAnemiaFarrington };
+function computeAnemiaFarrington(args) {
+  return computeSignalFarrington({ ...args, signalType: "anemia", testCode: "HB" });
+}
+
+module.exports = { computeSignalFarrington, computeAnemiaFarrington };

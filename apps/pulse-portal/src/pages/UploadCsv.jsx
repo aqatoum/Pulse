@@ -63,7 +63,8 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
       const fd = new FormData();
       fd.append("file", file);
 
-      const r = await fetch(`${API}/api/upload/lab-results`, {
+      const r = await fetch(`${API}/api/upload/csv`, {
+
         method: "POST",
         body: fd,
       });

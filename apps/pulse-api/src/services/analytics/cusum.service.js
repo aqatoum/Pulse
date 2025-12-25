@@ -1,175 +1,226 @@
-const { generateInterpretation } = require("./interpretation.service");
-const ANALYTICS_DEFAULTS = require("../../config/analytics.defaults");
+const dayjs = require("dayjs");
+const isoWeek = require("dayjs/plugin/isoWeek");
+dayjs.extend(isoWeek);
+
+const CLINICAL = require("../../config/clinical.thresholds");
 
 // ===== Helpers =====
+function normCode(x) {
+  return String(x || "").trim().toUpperCase();
+}
+
+function pickBand(bands, ageYears) {
+  const a = typeof ageYears === "number" ? ageYears : Number(ageYears);
+  if (!Number.isFinite(a)) return null;
+  return (bands || []).find((b) => a >= b.min && a <= b.max) || null;
+}
 
 function anemiaThresholdHb(ageYears, sex) {
   const age = typeof ageYears === "number" && Number.isFinite(ageYears) ? ageYears : null;
   const s = String(sex || "U").toUpperCase();
-
   if (age !== null && age >= 5 && age <= 14) return 11.5;
-
   if (age !== null && age >= 15) {
     if (s === "F") return 12.0;
     if (s === "M") return 13.0;
     return 11.5;
   }
-
   return 11.0;
 }
 
-// Week key: YYYY-WW (ISO-ish)
-function weekKey(date) {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-  const y = d.getUTCFullYear();
-  const w = String(weekNo).padStart(2, "0");
+function buildCaseDef({ signalType, testCode }) {
+  const st = String(signalType || "").toLowerCase();
+  const tc = normCode(testCode);
+
+  if (st === "anemia" || tc === "HB" || tc === "HGB") {
+    return {
+      direction: "low",
+      isCase: (value, row) => value < anemiaThresholdHb(row?.ageYears, row?.sex),
+    };
+  }
+
+  const cfg = CLINICAL?.[tc] || null;
+  if (!cfg) return null;
+
+  const dir = String(cfg.direction || "high").toLowerCase() === "low" ? "low" : "high";
+
+  return {
+    direction: dir,
+    isCase: (value, row) => {
+      const band = pickBand(cfg.bands, row?.ageYears);
+      if (!band) return false;
+      if (dir === "high") {
+        const u = typeof band.upper === "number" ? band.upper : null;
+        if (u == null) return false;
+        return value > u;
+      }
+      const l = typeof band.lower === "number" ? band.lower : null;
+      if (l == null) return false;
+      return value < l;
+    },
+  };
+}
+
+function getWeekKey(d) {
+  const x = dayjs(d);
+  const y = x.isoWeekYear();
+  const w = String(x.isoWeek()).padStart(2, "0");
   return `${y}-W${w}`;
 }
 
-function meanStd(values) {
-  const xs = values.filter((v) => typeof v === "number" && Number.isFinite(v));
-  if (xs.length === 0) return { mean: null, std: null, n: 0 };
-
-  const m = xs.reduce((a, b) => a + b, 0) / xs.length;
-  const varPop = xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length;
-  const std = Math.sqrt(varPop);
-
-  return { mean: Number(m.toFixed(6)), std: Number(std.toFixed(6)), n: xs.length };
+function safeNum(v) {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
-function getCusumDefaults() {
-  const d = ANALYTICS_DEFAULTS?.anemia?.cusum || {};
-  return {
-    baselineN: d?.baselineN ?? 4,
-    k: d?.k ?? 0.5,
-    h: d?.h ?? 5.0,
-  };
+function extractValue(row) {
+  const v = safeNum(row?.value);
+  if (v != null) return v;
+  const hb = safeNum(row?.hb);
+  if (hb != null) return hb;
+  return null;
+}
+
+function mean(arr) {
+  if (!arr.length) return null;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+function std(arr) {
+  if (arr.length < 2) return 0;
+  const m = mean(arr);
+  const v = arr.reduce((s, x) => s + (x - m) ** 2, 0) / (arr.length - 1);
+  return Math.sqrt(v);
 }
 
 /**
- * CUSUM (one-sided upper) on standardized deviation of weekly anemia lowRate.
- *
- * s_t = (x_t - mu0) / sigma0
- * C_t = max(0, C_{t-1} + s_t - k)
- * alert if C_t > h
+ * ✅ Generic CUSUM over weekly CASE rate.
  */
-function computeAnemiaCusum({
+function computeSignalCusum({
   rows,
-  baselineN: baselineN_in,
-  k: k_in,
-  h: h_in,
+  signalType = "anemia",
+  testCode = "HB",
+  baselineN = 4,
+  k = 0.5,
+  h = 5.0,
   lang = "both",
-} = {}) {
-  const defaults = getCusumDefaults();
+  preset = "standard",
+  timeRange = null,
+}) {
+  const caseDef = buildCaseDef({ signalType, testCode });
+  if (!caseDef) {
+    return {
+      cusum: {
+        baselineWeeksUsed: 0,
+        baselineMean: null,
+        baselineStd: null,
+        k,
+        h,
+        direction: null,
+        testCode: normCode(testCode),
+        points: [],
+      },
+      interpretation:
+        lang === "both"
+          ? { ar: "لا توجد عتبات سريرية معرفة لهذا الفحص بعد.", en: "No clinical thresholds defined for this test yet." }
+          : lang === "ar"
+          ? "لا توجد عتبات سريرية معرفة لهذا الفحص بعد."
+          : "No clinical thresholds defined for this test yet.",
+    };
+  }
 
-  // Use defaults if caller didn't provide values
-  const baselineN = Number.isFinite(Number(baselineN_in)) ? Math.max(1, Number(baselineN_in)) : defaults.baselineN;
-  const k = Number.isFinite(Number(k_in)) ? Number(k_in) : defaults.k;
-  const h = Number.isFinite(Number(h_in)) ? Number(h_in) : defaults.h;
-
-  const buckets = new Map();
-
+  const byWeek = new Map();
   for (const r of rows || []) {
-    const hb = typeof r.hb === "number" && Number.isFinite(r.hb) ? r.hb : null;
-    const td = r.testDate ? new Date(r.testDate) : null;
-    if (!hb || !td) continue;
+    const dt = r?.testDate || r?.collectedAt;
+    if (!dt) continue;
 
-    const wk = weekKey(td);
-    if (!buckets.has(wk)) buckets.set(wk, { week: wk, n: 0, low: 0 });
+    const rowCode = r?.testCode ? normCode(r.testCode) : null;
+    if (rowCode && normCode(testCode) && rowCode !== normCode(testCode)) continue;
 
-    const b = buckets.get(wk);
-    b.n++;
-    if (hb < anemiaThresholdHb(r.ageYears, r.sex)) b.low++;
+    const v = extractValue(r);
+    if (v == null) continue;
+
+    const wk = getWeekKey(dt);
+    if (!byWeek.has(wk)) byWeek.set(wk, { n: 0, cases: 0 });
+    const g = byWeek.get(wk);
+
+    g.n += 1;
+    if (caseDef.isCase(v, r)) g.cases += 1;
   }
 
-  const series = Array.from(buckets.values())
-    .sort((a, b) => (a.week > b.week ? 1 : -1))
-    .map((x) => ({
-      week: x.week,
-      n: x.n,
-      low: x.low,
-      x: x.n > 0 ? x.low / x.n : null,
-    }))
-    .filter((p) => typeof p.x === "number");
+  const weeks = Array.from(byWeek.keys()).sort();
+  const points = weeks.map((wk) => {
+    const g = byWeek.get(wk);
+    const rate = g.n > 0 ? g.cases / g.n : 0;
+    return {
+      week: wk,
+      n: g.n,
+      low: caseDef.direction === "low" ? g.cases : 0,
+      lowRate: caseDef.direction === "low" ? rate : 0,
+      high: caseDef.direction === "high" ? g.cases : 0,
+      highRate: caseDef.direction === "high" ? rate : 0,
+      rate,
+    };
+  });
 
-  if (series.length === 0) {
-    return { cusum: { points: [] }, interpretation: null };
-  }
+  const baseSlice = points.slice(0, Math.max(0, baselineN));
+  const baseRates = baseSlice.map((p) => p.rate);
+  const baselineMean = mean(baseRates) ?? 0;
+  const baselineStd = std(baseRates);
 
-  const baselineSlice = series.slice(0, Math.min(baselineN, series.length)).map((p) => p.x);
-  const base = meanStd(baselineSlice);
-
-  const sigma0 = base.std !== null && base.std > 0 ? base.std : 1e-6;
-  const mu0 = base.mean;
-
-  const points = [];
-  let cPrev = 0;
-
-  for (const p of series) {
-    const s = mu0 !== null ? (p.x - mu0) / sigma0 : 0;
-    const c = Math.max(0, cPrev + s - k);
-
-    points.push({
+  // one-sided upper CUSUM on rate
+  let c = 0;
+  const outPoints = points.map((p) => {
+    const s = (p.rate - baselineMean) / (baselineStd || 1); // standardized-ish; safe if std=0
+    c = Math.max(0, c + (s - k));
+    const alert = c > h && baselineStd > 0;
+    return {
       week: p.week,
       n: p.n,
       low: p.low,
-      lowRate: Number(p.x.toFixed(4)),
-      s: Number(s.toFixed(6)),
-      c: Number(c.toFixed(6)),
-      alert: c > h,
-    });
+      lowRate: p.lowRate,
+      high: p.high,
+      highRate: p.highRate,
+      s: Number(s.toFixed(4)),
+      c: Number(c.toFixed(4)),
+      alert,
+    };
+  });
 
-    cPrev = c;
-  }
+  const last = outPoints[outPoints.length - 1] || null;
 
-  const last = points[points.length - 1];
+  const interpEn =
+    !outPoints.length
+      ? `No data available for ${normCode(testCode)}.`
+      : `CUSUM tracked weekly ${caseDef.direction.toUpperCase()}-case rate for ${normCode(
+          testCode
+        )}. Latest week ${last.week} has ${last.n} tests; alert=${last.alert ? "YES" : "NO"}.`;
 
-  const interpretation =
-    String(lang || "both").toLowerCase() === "both"
-      ? {
-          ar: generateInterpretation({
-            language: "ar",
-            signalType: "anemia",
-            method: "CUSUM",
-            lastZ: last.c,
-            UCL: h,
-            points,
-            recentN: last.n,
-          }),
-          en: generateInterpretation({
-            language: "en",
-            signalType: "anemia",
-            method: "CUSUM",
-            lastZ: last.c,
-            UCL: h,
-            points,
-            recentN: last.n,
-          }),
-        }
-      : generateInterpretation({
-          language: String(lang || "en").toLowerCase(),
-          signalType: "anemia",
-          method: "CUSUM",
-          lastZ: last.c,
-          UCL: h,
-          points,
-          recentN: last.n,
-        });
+  const interpAr =
+    !outPoints.length
+      ? `لا توجد بيانات للفحص ${normCode(testCode)}.`
+      : `تم تتبع CUSUM لمعدل الحالات (${caseDef.direction === "high" ? "مرتفع" : "منخفض"}) أسبوعيًا للفحص ${normCode(
+          testCode
+        )}. آخر أسبوع ${last.week} عدد الفحوصات ${last.n}؛ إنذار=${last.alert ? "نعم" : "لا"}.`;
 
   return {
     cusum: {
-      baselineWeeksUsed: Math.min(baselineN, series.length),
-      baselineMean: mu0 !== null ? Number(mu0.toFixed(6)) : null,
-      baselineStd: base.std !== null ? Number(base.std.toFixed(6)) : null,
-      k: Number(k),
-      h: Number(h),
-      points,
+      baselineWeeksUsed: baseSlice.length,
+      baselineMean: Number((baselineMean ?? 0).toFixed(4)),
+      baselineStd: Number((baselineStd ?? 0).toFixed(4)),
+      k,
+      h,
+      direction: caseDef.direction,
+      testCode: normCode(testCode),
+      points: outPoints,
     },
-    interpretation,
+    interpretation:
+      lang === "both" ? { ar: interpAr, en: interpEn } : lang === "ar" ? interpAr : interpEn,
   };
 }
 
-module.exports = { computeAnemiaCusum };
+function computeAnemiaCusum(args) {
+  return computeSignalCusum({ ...args, signalType: "anemia", testCode: "HB" });
+}
+
+module.exports = { computeSignalCusum, computeAnemiaCusum };

@@ -1,0 +1,6 @@
+collectedAt,testCode,value,unit,sex,ageYears,nationality,facilityId,facilityName,regionId,regionName,labId,patientKey
+2025-01-03,HB,11.2,g/dL,M,9,Jordanian,,,,,,P001
+2025-01-03,WBC,12.5,x10^9/L,F,32,Syrian,,,AMM-SOUTH,Amman South,,P002
+2025-01-10,CRP,18.0,mg/L,U,45,Palestinian,AMM-NEWCAMP-01,New Camp Clinic,AMM-SOUTH,Amman South,,P003
+2025-01-17,PLT,140.0,x10^9/L,M,70,Jordanian,AMM-NEWCAMP-01,New Camp Clinic,AMM-SOUTH,Amman South,,P004
+2025-01-24,WBC,8.1,x10^9/L,F,6,Jordanian,,,,,,P005
