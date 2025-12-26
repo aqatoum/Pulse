@@ -10,6 +10,8 @@ const { buildReport } = require("../services/analytics/report.service");
 
 const { buildConsensus, buildSignatureInsight } = require("../services/analytics/consensus.service");
 
+const { buildNarratives } = require("../services/reports/narrativeReport.service"); // ✅ NEW
+
 const { apiOk, apiError } = require("../utils/response");
 const ANALYTICS_DEFAULTS = require("../config/analytics.defaults");
 
@@ -231,13 +233,10 @@ function pickInterpretationForConsensus(interpretation, lang) {
 
 /* ===============================
    ✅ NEW: extract perMethod safely
-   - uses interpretation if present
-   - otherwise derives from results points
    =============================== */
 function normalizeLevel(x, fallback = "info") {
   const v = String(x || "").toLowerCase();
   if (v === "alert" || v === "watch" || v === "info") return v;
-  // sometimes services return "warning"/"warn"
   if (v === "warning" || v === "warn") return "watch";
   return fallback;
 }
@@ -247,12 +246,9 @@ function normalizeConfidence(x, fallback = "low") {
   if (v === "med") return "medium";
   return fallback;
 }
-
-// tries to pull { alertLevel, confidenceLevel } from various interpretation shapes
 function extractMethodInterpretation(interpretation) {
   if (!interpretation) return null;
 
-  // if already object with desired keys
   if (typeof interpretation === "object") {
     if (interpretation.alertLevel || interpretation.confidenceLevel) {
       return {
@@ -260,7 +256,6 @@ function extractMethodInterpretation(interpretation) {
         confidenceLevel: normalizeConfidence(interpretation.confidenceLevel),
       };
     }
-    // sometimes nested like { en: { alertLevel... }, ar: { ... } }
     if (interpretation.en && (interpretation.en.alertLevel || interpretation.en.confidenceLevel)) {
       return {
         alertLevel: normalizeLevel(interpretation.en.alertLevel),
@@ -268,28 +263,23 @@ function extractMethodInterpretation(interpretation) {
       };
     }
   }
-
   return null;
 }
 
-function deriveFromResult(resultObj, methodName) {
+function deriveFromResult(resultObj) {
   const pts = resultObj?.points;
   const last = latest(pts);
 
-  // try common shapes
   const hasAlert =
     last?.alert === true ||
     last?.isAlert === true ||
     last?.flag === true ||
     last?.alarm === true;
 
-  // some engines store "alertLevel" per point
   const pointLevel = normalizeLevel(last?.alertLevel || last?.level || null, null);
 
-  // Farrington commonly uses UCL comparison, but we avoid heavy logic in routes.
   const alertLevel = pointLevel || (hasAlert ? "alert" : "info");
 
-  // confidence: very rough heuristic based on point count
   const nPts = Array.isArray(pts) ? pts.length : 0;
   const confidenceLevel = nPts >= 12 ? "high" : nPts >= 4 ? "medium" : "low";
 
@@ -305,11 +295,7 @@ function computeConsensusFromPerMethod(perMethod) {
   if (alertCount > 0) decision = "alert";
   else if (watchCount > 0) decision = "watch";
 
-  return {
-    decision,
-    counts: { alert: alertCount, watch: watchCount },
-    perMethod,
-  };
+  return { decision, counts: { alert: alertCount, watch: watchCount }, perMethod };
 }
 
 /* ===============================
@@ -318,28 +304,28 @@ function computeConsensusFromPerMethod(perMethod) {
 function withScopeTop(scopeRes) {
   return {
     scope: {
-      type: scopeRes.scope.scopeType, // GLOBAL | FACILITY | REGION | LAB
+      type: scopeRes.scope.scopeType,
       id: scopeRes.scope.scopeId,
       labId: scopeRes.scope.labId || null,
       regionId: scopeRes.scope.regionId || null,
       facilityId: scopeRes.scope.facilityId || null,
     },
-    facilityId: scopeRes.scope.scopeId, // backward compatibility
+    facilityId: scopeRes.scope.scopeId,
   };
 }
 
 /* ===============================
    ✅ Load rows for ANY testCode
-   rows returned contain: { value, testDate, sex, ageYears, nationality, testCode }
    =============================== */
 async function loadSignalRows({ scope, dateFilter, testCode }) {
   const tc = normCode(testCode);
-  if (!tc)
+  if (!tc) {
     return {
       rows: [],
       dateRange: { start: null, end: null, filtered: dateFilter?.forMeta || {} },
       rawCount: 0,
     };
+  }
 
   const q = {
     ...buildBaseQuery(scope),
@@ -362,10 +348,6 @@ async function loadSignalRows({ scope, dateFilter, testCode }) {
       sex: 1,
       ageYears: 1,
       nationality: 1,
-      facilityId: 1,
-      regionId: 1,
-      labId: 1,
-      uploadId: 1,
     })
     .sort({ testDate: 1, collectedAt: 1 })
     .lean();
@@ -404,7 +386,7 @@ async function loadSignalRows({ scope, dateFilter, testCode }) {
 }
 
 /* ===============================
-   Data quality summary (trust indicators)
+   Data quality summary
    =============================== */
 function computeDataQuality({ profile, results }) {
   const overallN = profile?.overall?.n ?? 0;
@@ -431,8 +413,166 @@ function computeDataQuality({ profile, results }) {
 }
 
 /* ===============================
-   ✅ PROFILE (generic via old endpoint)
-   /api/analytics/anemia-profile?signal=crp&testCode=CRP
+   ✅ Shared analysis builder (RUN + REPORT)
+   =============================== */
+function applyQualityNotesAndDowngrade({ consensus, signatureInsight, dataQuality }) {
+  const notEnoughData = (dataQuality?.overallN ?? 0) < 20 || (dataQuality?.weeksCoverage ?? 0) < 4;
+
+  if (!notEnoughData) return { consensus, signatureInsight };
+
+  const noteAr =
+    "ملاحظة جودة: حجم العينة أو التغطية الزمنية غير كافيين للحكم بثقة عالية. اعتبر النتيجة استرشادية حتى تتوفر بيانات أكثر.";
+  const noteEn =
+    "Data quality note: sample size or time coverage is insufficient for high-confidence inference. Treat this as indicative until more data are available.";
+
+  if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr;
+  if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn;
+
+  if (String(consensus?.decision || "").toLowerCase() === "alert") {
+    consensus.decision = "watch";
+    const noteAr2 = "ملاحظة جودة: تم تخفيض القرار من ALERT إلى WATCH لأن البيانات غير كافية لإنذار موثوق.";
+    const noteEn2 = "Data quality note: Decision was downgraded from ALERT to WATCH due to insufficient data for a reliable alert.";
+    if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr2;
+    if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn2;
+  }
+
+  return { consensus, signatureInsight };
+}
+
+async function buildAnalysisBundle({ req, scopeRes, lang, signal, testCode, methods, params, dateFilter }) {
+  const { rows, dateRange } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
+
+  const results = {};
+  const interpretations = {};
+
+  for (const method of methods) {
+    if (method === "ewma") {
+      const fn = signal === "anemia" ? computeAnemiaEwma : computeSignalEwma;
+      const { ewma, interpretation } = fn({
+        rows,
+        signalType: signal,
+        testCode,
+        ...params.ewma,
+        lang,
+        preset: params.preset,
+        timeRange: dateRange.filtered,
+      });
+      results.ewma = ewma;
+      interpretations.ewma = pickInterpretationForConsensus(interpretation, lang);
+    }
+
+    if (method === "cusum") {
+      const fn = signal === "anemia" ? computeAnemiaCusum : computeSignalCusum;
+      const { cusum, interpretation } = fn({
+        rows,
+        signalType: signal,
+        testCode,
+        ...params.cusum,
+        lang,
+        preset: params.preset,
+        timeRange: dateRange.filtered,
+      });
+      results.cusum = cusum;
+      interpretations.cusum = pickInterpretationForConsensus(interpretation, lang);
+    }
+
+    if (method === "farrington") {
+      const fn = signal === "anemia" ? computeAnemiaFarrington : computeSignalFarrington;
+      const { farrington, interpretation } = fn({
+        rows,
+        signalType: signal,
+        testCode,
+        ...params.farrington,
+        lang,
+        preset: params.preset,
+        timeRange: dateRange.filtered,
+      });
+      results.farrington = farrington;
+      interpretations.farrington = pickInterpretationForConsensus(interpretation, lang);
+    }
+  }
+
+  // Profile always in both
+  const profOut =
+    signal === "anemia"
+      ? computeAnemiaProfile({ rows, lang: "both" })
+      : computeSignalProfile({ rows, signalType: signal, testCode, lang: "both" });
+
+  const profile = profOut?.profile || null;
+  const profileInsight = profOut?.insight || null;
+
+  // Build consensus (service) then force perMethod consistency
+  let consensus = buildConsensus({ interpretations, methods });
+
+  const perMethod = {};
+  for (const method of methods) {
+    const interp = extractMethodInterpretation(interpretations?.[method]);
+    if (interp) perMethod[method] = interp;
+    else perMethod[method] = deriveFromResult(results?.[method]);
+  }
+  const computedConsensus = computeConsensusFromPerMethod(perMethod);
+
+  consensus = {
+    ...(consensus || {}),
+    decision: computedConsensus.decision,
+    counts: computedConsensus.counts,
+    perMethod: computedConsensus.perMethod,
+  };
+
+  // Signature Insight
+  const signatureInsight =
+    lang === "both"
+      ? {
+          ar: {
+            ...buildSignatureInsight({ signalType: signal, consensus, methods, language: "ar" }),
+            stratificationKeyFinding: profileInsight?.ar?.keyFinding ?? null,
+          },
+          en: {
+            ...buildSignatureInsight({ signalType: signal, consensus, methods, language: "en" }),
+            stratificationKeyFinding: profileInsight?.en?.keyFinding ?? null,
+          },
+        }
+      : {
+          ...buildSignatureInsight({ signalType: signal, consensus, methods, language: lang }),
+          stratificationKeyFinding: profileInsight?.en?.keyFinding ?? null,
+        };
+
+  const dataQuality = computeDataQuality({ profile, results });
+
+  // Apply quality notes + downgrade in BOTH /run and /report
+  const patched = applyQualityNotesAndDowngrade({ consensus, signatureInsight, dataQuality });
+  consensus = patched.consensus;
+  const finalSignatureInsight = patched.signatureInsight;
+
+  // New narratives (public + technical)
+  const narratives = buildNarratives({
+    lang,
+    scope: scopeRes.scope,
+    analysis: { signalType: signal, testCode, methods, preset: params.preset },
+    dateRange,
+    consensus,
+    dataQuality,
+    profile,
+    profileInsight,
+    results,
+  });
+
+  return {
+    rowsCount: rows.length,
+    dateRange,
+    results,
+    interpretations,
+    consensus,
+    signatureInsight: finalSignatureInsight,
+    dataQuality,
+    profile,
+    profileInsight,
+    narratives,
+  };
+}
+
+/* ===============================
+   ✅ PROFILE
    =============================== */
 router.get("/anemia-profile", async (req, res) => {
   try {
@@ -457,12 +597,7 @@ router.get("/anemia-profile", async (req, res) => {
         analysis: {
           signalType: signal,
           method: "PROFILE",
-          params: {
-            signal,
-            testCode,
-            lang,
-            ...scopeRes.scope,
-          },
+          params: { signal, testCode, lang, ...scopeRes.scope },
           dateRange,
         },
         data: {
@@ -490,7 +625,7 @@ router.get("/run", async (req, res) => {
     const signal = String(req.query.signal || "anemia").trim().toLowerCase();
     const testCode = normCode(req.query.testCode || (signal === "anemia" ? "HB" : ""));
 
-    const params = getAnemiaParams(req); // reuse same params for all signals
+    const params = getAnemiaParams(req);
     const dateFilter = getDateRangeFilter(req);
 
     const methodsRaw = String(req.query.methods || "ewma,cusum,farrington");
@@ -503,140 +638,16 @@ router.get("/run", async (req, res) => {
       return res.status(400).json(apiError({ status: 400, error: "methods is required" }));
     }
 
-    const { rows, dateRange } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
-
-    const results = {};
-    const interpretations = {};
-
-    for (const method of methods) {
-      if (method === "ewma") {
-        const fn = signal === "anemia" ? computeAnemiaEwma : computeSignalEwma;
-        const { ewma, interpretation } = fn({
-          rows,
-          signalType: signal,
-          testCode,
-          ...params.ewma,
-          lang,
-          preset: params.preset,
-          timeRange: dateRange.filtered,
-        });
-        results.ewma = ewma;
-        interpretations.ewma = pickInterpretationForConsensus(interpretation, lang);
-      }
-
-      if (method === "cusum") {
-        const fn = signal === "anemia" ? computeAnemiaCusum : computeSignalCusum;
-        const { cusum, interpretation } = fn({
-          rows,
-          signalType: signal,
-          testCode,
-          ...params.cusum,
-          lang,
-          preset: params.preset,
-          timeRange: dateRange.filtered,
-        });
-        results.cusum = cusum;
-        interpretations.cusum = pickInterpretationForConsensus(interpretation, lang);
-      }
-
-      if (method === "farrington") {
-        const fn = signal === "anemia" ? computeAnemiaFarrington : computeSignalFarrington;
-        const { farrington, interpretation } = fn({
-          rows,
-          signalType: signal,
-          testCode,
-          ...params.farrington,
-          lang,
-          preset: params.preset,
-          timeRange: dateRange.filtered,
-        });
-        results.farrington = farrington;
-        interpretations.farrington = pickInterpretationForConsensus(interpretation, lang);
-      }
-    }
-
-    // ✅ Profile (stratification)
-    const profOut =
-      signal === "anemia"
-        ? computeAnemiaProfile({ rows, lang: "both" })
-        : computeSignalProfile({ rows, signalType: signal, testCode, lang: "both" });
-
-    const profile = profOut?.profile || null;
-    const profileInsight = profOut?.insight || null;
-
-    // ✅ First consensus (keep your service)
-    let consensus = buildConsensus({ interpretations, methods });
-
-    // ✅ Signature Insight
-    const signatureInsight =
-      lang === "both"
-        ? {
-            ar: {
-              ...buildSignatureInsight({ signalType: signal, consensus, methods, language: "ar" }),
-              stratificationKeyFinding: profileInsight?.ar?.keyFinding ?? null,
-            },
-            en: {
-              ...buildSignatureInsight({ signalType: signal, consensus, methods, language: "en" }),
-              stratificationKeyFinding: profileInsight?.en?.keyFinding ?? null,
-            },
-          }
-        : {
-            ...buildSignatureInsight({ signalType: signal, consensus, methods, language: lang }),
-            stratificationKeyFinding: profileInsight?.en?.keyFinding ?? null,
-          };
-
-    const dataQuality = computeDataQuality({ profile, results });
-
-    // ==========================
-    // ✅ FIX #1: ensure consensus.perMethod is filled
-    // ==========================
-    const perMethod = {};
-    for (const method of methods) {
-      const interp = extractMethodInterpretation(interpretations?.[method]);
-      if (interp) {
-        perMethod[method] = interp;
-      } else {
-        const r = results?.[method];
-        perMethod[method] = deriveFromResult(r, method);
-      }
-    }
-
-    // if consensus service returned empty perMethod, overwrite with ours
-    const computedConsensus = computeConsensusFromPerMethod(perMethod);
-
-    // keep original consensus if it contains extra fields, but force perMethod + counts + decision to be consistent
-    consensus = {
-      ...(consensus || {}),
-      decision: computedConsensus.decision,
-      counts: computedConsensus.counts,
-      perMethod: computedConsensus.perMethod,
-    };
-
-    // ==========================
-    // ✅ FIX #2: data quality note ALWAYS when data insufficient
-    // ==========================
-    const notEnoughData = (dataQuality?.overallN ?? 0) < 20 || (dataQuality?.weeksCoverage ?? 0) < 4;
-
-    if (notEnoughData) {
-      const noteAr =
-        "ملاحظة جودة: حجم العينة أو التغطية الزمنية غير كافيين للحكم بثقة عالية. اعتبر النتيجة استرشادية حتى تتوفر بيانات أكثر.";
-      const noteEn =
-        "Data quality note: sample size or time coverage is insufficient for high-confidence inference. Treat this as indicative until more data are available.";
-
-      if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr;
-      if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn;
-    }
-
-    // still keep downgrade rule only if ALERT (optional extra safety)
-    if (notEnoughData && String(consensus?.decision || "").toLowerCase() === "alert") {
-      consensus.decision = "watch";
-      const noteAr2 =
-        "ملاحظة جودة: تم تخفيض القرار من ALERT إلى WATCH لأن البيانات غير كافية لإنذار موثوق.";
-      const noteEn2 =
-        "Data quality note: Decision was downgraded from ALERT to WATCH due to insufficient data for a reliable alert.";
-      if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr2;
-      if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn2;
-    }
+    const bundle = await buildAnalysisBundle({
+      req,
+      scopeRes,
+      lang,
+      signal,
+      testCode,
+      methods,
+      params,
+      dateFilter,
+    });
 
     return res.json(
       apiOk({
@@ -654,15 +665,15 @@ router.get("/run", async (req, res) => {
             advanced: String(req.query.advanced || "0") === "1",
             locked: params.locked,
           },
-          dateRange,
+          dateRange: bundle.dateRange,
         },
         data: {
-          consensus,
-          signatureInsight,
-          results,
-          profile,
-          profileInsight,
-          meta: { dataQuality, dateRange },
+          consensus: bundle.consensus,
+          signatureInsight: bundle.signatureInsight,
+          results: bundle.results,
+          profile: bundle.profile,
+          profileInsight: bundle.profileInsight,
+          meta: { dataQuality: bundle.dataQuality, dateRange: bundle.dateRange },
         },
       })
     );
@@ -673,7 +684,7 @@ router.get("/run", async (req, res) => {
 });
 
 /* ===============================
-   REPORT — /api/analytics/report
+   ✅ REPORT — /api/analytics/report
    =============================== */
 router.get("/report", async (req, res) => {
   try {
@@ -693,118 +704,53 @@ router.get("/report", async (req, res) => {
       .map((s) => s.trim().toLowerCase())
       .filter((x) => ["ewma", "cusum", "farrington"].includes(x));
 
-    const { rows, dateRange } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
-
-    const results = {};
-    const interpretationsForConsensus = {};
-
-    for (const method of methods) {
-      if (method === "ewma") {
-        const fn = signal === "anemia" ? computeAnemiaEwma : computeSignalEwma;
-        const { ewma, interpretation } = fn({
-          rows,
-          signalType: signal,
-          testCode,
-          ...params.ewma,
-          lang,
-          preset: params.preset,
-          timeRange: dateRange.filtered,
-        });
-        results.ewma = ewma;
-        interpretationsForConsensus.ewma = pickInterpretationForConsensus(interpretation, lang);
-      }
-
-      if (method === "cusum") {
-        const fn = signal === "anemia" ? computeAnemiaCusum : computeSignalCusum;
-        const { cusum, interpretation } = fn({
-          rows,
-          signalType: signal,
-          testCode,
-          ...params.cusum,
-          lang,
-          preset: params.preset,
-          timeRange: dateRange.filtered,
-        });
-        results.cusum = cusum;
-        interpretationsForConsensus.cusum = pickInterpretationForConsensus(interpretation, lang);
-      }
-
-      if (method === "farrington") {
-        const fn = signal === "anemia" ? computeAnemiaFarrington : computeSignalFarrington;
-        const { farrington, interpretation } = fn({
-          rows,
-          signalType: signal,
-          testCode,
-          ...params.farrington,
-          lang,
-          preset: params.preset,
-          timeRange: dateRange.filtered,
-        });
-        results.farrington = farrington;
-        interpretationsForConsensus.farrington = pickInterpretationForConsensus(interpretation, lang);
-      }
+    if (!methods.length) {
+      return res.status(400).json(apiError({ status: 400, error: "methods is required" }));
     }
 
-    const consensus = buildConsensus({ interpretations: interpretationsForConsensus, methods });
+    const bundle = await buildAnalysisBundle({
+      req,
+      scopeRes,
+      lang,
+      signal,
+      testCode,
+      methods,
+      params,
+      dateFilter,
+    });
 
-    const profOut =
-      signal === "anemia"
-        ? computeAnemiaProfile({ rows, lang: "both" })
-        : computeSignalProfile({ rows, signalType: signal, testCode, lang: "both" });
-
-    const profile = profOut?.profile || null;
-    const profileInsight = profOut?.insight || null;
-
-    const signatureInsight =
-      lang === "both"
-        ? {
-            ar: {
-              ...buildSignatureInsight({ signalType: signal, consensus, methods, language: "ar" }),
-              stratificationKeyFinding: profileInsight?.ar?.keyFinding ?? null,
-            },
-            en: {
-              ...buildSignatureInsight({ signalType: signal, consensus, methods, language: "en" }),
-              stratificationKeyFinding: profileInsight?.en?.keyFinding ?? null,
-            },
-          }
-        : {
-            ...buildSignatureInsight({ signalType: signal, consensus, methods, language: lang }),
-            stratificationKeyFinding: profileInsight?.en?.keyFinding ?? null,
-          };
-
-    const dataQuality = computeDataQuality({ profile, results });
-
-    // ✅ add note in report too (same logic)
-    const notEnoughData = (dataQuality?.overallN ?? 0) < 20 || (dataQuality?.weeksCoverage ?? 0) < 4;
-    if (notEnoughData) {
-      const noteAr =
-        "ملاحظة جودة: حجم العينة أو التغطية الزمنية غير كافيين للحكم بثقة عالية. اعتبر النتيجة استرشادية حتى تتوفر بيانات أكثر.";
-      const noteEn =
-        "Data quality note: sample size or time coverage is insufficient for high-confidence inference. Treat this as indicative until more data are available.";
-      if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr;
-      if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn;
-    }
-
-    const built = buildReport({
+    // Old report builder (keep it for compatibility)
+    const builtLegacy = buildReport({
       facilityId: scopeRes.scope.scopeId,
       signalType: signal,
       methods,
-      consensus,
-      signatureInsight,
-      profile,
+      consensus: bundle.consensus,
+      signatureInsight: bundle.signatureInsight,
+      profile: bundle.profile,
       lang,
-      weeksCount: dataQuality.weeksCoverage,
-      baselineStd: results?.ewma?.baselineStd ?? null,
+      weeksCount: bundle.dataQuality?.weeksCoverage,
+      baselineStd: bundle.results?.ewma?.baselineStd ?? null,
     });
+
+    // ✅ New: public + technical reports
+    const reportPublic =
+      lang === "both"
+        ? { ar: bundle.narratives?.public?.ar || "", en: bundle.narratives?.public?.en || "" }
+        : { [lang]: bundle.narratives?.public?.[lang] || "" };
+
+    const reportTechnical =
+      lang === "both"
+        ? { ar: bundle.narratives?.technical?.ar || "", en: bundle.narratives?.technical?.en || "" }
+        : { [lang]: bundle.narratives?.technical?.[lang] || "" };
 
     let reportText = "";
     let translations = null;
 
     if (lang === "both") {
-      reportText = String(built?.en || "");
-      translations = { ar: String(built?.ar || ""), en: String(built?.en || "") };
+      reportText = String(builtLegacy?.en || "");
+      translations = { ar: String(builtLegacy?.ar || ""), en: String(builtLegacy?.en || "") };
     } else {
-      reportText = String(built || "");
+      reportText = String(builtLegacy || "");
     }
 
     return res.json(
@@ -823,12 +769,19 @@ router.get("/report", async (req, res) => {
             preset: params.preset,
             advanced: String(req.query.advanced || "0") === "1",
           },
-          dateRange,
+          dateRange: bundle.dateRange,
         },
         data: {
+          // ✅ Legacy field
           report: reportText,
           ...(translations ? { translations } : {}),
-          meta: { dataQuality, dateRange },
+
+          // ✅ New fields
+          reportPublic,
+          reportTechnical,
+
+          meta: { dataQuality: bundle.dataQuality, dateRange: bundle.dateRange },
+          consensus: bundle.consensus, // useful for debugging/consistency
         },
         interpretation: null,
       })

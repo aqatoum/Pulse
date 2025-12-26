@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import DecisionCard from "../components/DecisionCard.jsx";
+
 import SimpleSeriesChart from "../components/SimpleSeriesChart.jsx";
 import UploadCsv from "../components/UploadCsv.jsx";
 
@@ -16,8 +16,6 @@ import {
   clampNum,
   clampInt,
   fmtPct,
-  extractDateRange,
-  extractReport,
   fetchJSON,
   normalizeDateRange,
   pickRate,
@@ -262,6 +260,9 @@ const styles = `
     border: 1px solid rgba(255,255,255,0.14);
     box-shadow: 0 18px 60px rgba(0,0,0,0.45);
     overflow:hidden;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
   }
   .modalHeader{
     display:flex;
@@ -270,15 +271,27 @@ const styles = `
     align-items:flex-start;
     padding: 14px 16px;
     border-bottom: 1px solid rgba(255,255,255,0.10);
+    flex: 0 0 auto;
   }
   .modalTitle{ font-weight: 950; }
-  .modalBody{ padding: 14px 16px; }
+  .modalBody{
+    padding: 14px 16px;
+    overflow: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  .tableWrap{
+    width: 100%;
+    overflow-x: auto;
+    border-radius: 12px;
+  }
   .table{
     width: 100%;
     border-collapse: collapse;
     overflow:hidden;
     border-radius: 12px;
     border: 1px solid rgba(255,255,255,0.12);
+    min-width: 620px;
   }
   .table th, .table td{
     padding: 10px 10px;
@@ -286,6 +299,7 @@ const styles = `
     font-size: 12px;
     text-align: start;
     vertical-align: top;
+    white-space: nowrap;
   }
   .table th{ font-weight: 950; background: rgba(255,255,255,0.06); }
   .table tr:last-child td{ border-bottom: 0; }
@@ -300,6 +314,25 @@ const styles = `
     font-size: 12px;
     line-height: 1.7;
     text-align: center;
+  }
+
+  .segTabs{
+    display:flex; gap:8px; flex-wrap:wrap;
+    margin-top: 8px;
+  }
+  .segBtn{
+    border-radius: 999px;
+    padding: 8px 12px;
+    font-weight: 950;
+    cursor:pointer;
+    background: rgba(255,255,255,0.08);
+    color: var(--text);
+    border: 1px solid rgba(255,255,255,0.14);
+  }
+  .segBtnOn{
+    background: rgba(255,255,255,0.92);
+    color: var(--ink);
+    border-color: rgba(255,255,255,0.75);
   }
 
   @media (max-width: 980px){
@@ -359,6 +392,70 @@ function decisionTheme(decisionUpper) {
 }
 
 /* =========================
+   ✅ Nationality Label (AR/EN)
+   ========================= */
+function normalizeNat(v) {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+  if (/^[A-Za-z]{2}$/.test(s)) return s.toUpperCase();
+  return s;
+}
+
+function nationalityLabel(v, lang) {
+  const raw = normalizeNat(v);
+  if (!raw) return "—";
+
+  const buckets = {
+    Other: { ar: "أخرى", en: "Other" },
+    OTHER: { ar: "أخرى", en: "Other" },
+    Unknown: { ar: "غير معروف", en: "Unknown" },
+    UNKNOWN: { ar: "غير معروف", en: "Unknown" },
+  };
+  if (buckets[raw]) return buckets[raw][lang === "ar" ? "ar" : "en"];
+
+  if (lang === "ar" && /[\u0600-\u06FF]/.test(raw)) return raw;
+
+  if (/^[A-Z]{2}$/.test(raw) && typeof Intl !== "undefined" && typeof Intl.DisplayNames === "function") {
+    try {
+      const dn = new Intl.DisplayNames([lang === "ar" ? "ar" : "en"], { type: "region" });
+      const out = dn.of(raw);
+      if (out) return out;
+    } catch {}
+  }
+
+  const mapAr = {
+    Jordan: "الأردن",
+    Palestine: "فلسطين",
+    Syria: "سوريا",
+    Iraq: "العراق",
+    Egypt: "مصر",
+    Lebanon: "لبنان",
+    "Saudi Arabia": "السعودية",
+    "United Arab Emirates": "الإمارات",
+    Yemen: "اليمن",
+    Sudan: "السودان",
+
+    Jordanian: "أردني",
+    Palestinian: "فلسطيني",
+    Syrian: "سوري",
+    Iraqi: "عراقي",
+    Egyptian: "مصري",
+    Lebanese: "لبناني",
+    Saudi: "سعودي",
+    Emirati: "إماراتي",
+    Yemeni: "يمني",
+    Sudanese: "سوداني",
+  };
+
+  if (lang === "ar") {
+    const key = raw.replace(/\s+/g, " ").trim();
+    if (mapAr[key]) return mapAr[key];
+  }
+
+  return raw;
+}
+
+/* =========================
    ✅ Strat UI Card
    ========================= */
 function StratCard({ title, items, getKey, t }) {
@@ -390,7 +487,7 @@ function StratCard({ title, items, getKey, t }) {
                 <div className="rowPct">{pct}</div>
               </div>
 
-              <div className="bar" title={`${t.cases}: ${pickCases(it) ?? "—"} • ${t.signalRate}: ${pct}`}>
+              <div className="bar" title={`${t.cases}: ${it?.cases ?? it?.nCases ?? "—"} • ${t.signalRate}: ${pct}`}>
                 <div
                   className="fill"
                   style={{
@@ -405,6 +502,159 @@ function StratCard({ title, items, getKey, t }) {
       )}
     </div>
   );
+}
+
+/* =========================
+   ✅ Helpers: consistent scope label
+   ========================= */
+function scopeLabelHuman({ scopeMode, facilityId, regionId, t, lang }) {
+  if (scopeMode === "global") return lang === "ar" ? "وطني (على مستوى الدولة)" : t.modeGlobal;
+  if (scopeMode === "facility") return `${t.modeFacility}: ${facilityId?.trim() || t.notAvailable}`;
+  return `${t.modeRegion}: ${regionId?.trim() || t.notAvailable}`;
+}
+
+/* =========================
+   ✅ NEW: Narrative builders (Public + Specialist)
+   - Uses SAME runData (no mismatch)
+   ========================= */
+function safeDateRange(dr, lang) {
+  const s = dr?.start || null;
+  const e = dr?.end || null;
+  if (!s && !e) return lang === "ar" ? "غير محدد" : "Not specified";
+  if (s && e) return `${s} → ${e}`;
+  return s || e;
+}
+
+function decisionLabel(decisionUpper, t) {
+  const d = String(decisionUpper || "INFO").toUpperCase();
+  if (d === "ALERT") return t.alert || "Alert";
+  if (d === "WATCH") return t.watch || "Watch";
+  return t.info || "Info";
+}
+
+function buildPublicNarrative({ lang, t, runData, testCode, derivedSignal, scopeMode, facilityId, regionId, trustMethods, trendLabel, confLabel }) {
+  const decision = String(runData?.consensus?.decision || "info").toUpperCase();
+  const dq = runData?.meta?.dataQuality || runData?.meta?.meta?.dataQuality || {};
+  const dr = runData?.meta?.dateRange || runData?.meta?.meta?.dateRange || runData?.meta?.dateRange || null;
+
+  const profile = runData?.profile || null;
+  const overallN = profile?.overall?.n ?? dq?.overallN ?? null;
+
+  const casesRaw = pickCases(profile?.overall);
+  const rateRaw = pickRate(profile?.overall);
+
+  const casesTxt =
+    casesRaw === null || typeof casesRaw === "undefined"
+      ? (lang === "ar" ? "غير محسوبة" : "Not computed")
+      : String(casesRaw);
+
+  const rateTxt = fmtPct(rateRaw);
+
+  const scopeTxt = scopeLabelHuman({ scopeMode, facilityId, regionId, t, lang });
+  const rangeTxt = safeDateRange(dr, lang);
+
+  const dqNote =
+    (runData?.signatureInsight?.[lang]?.dataQualityNote) ||
+    (lang === "ar"
+      ? (dq?.smallN || dq?.sparseSeries ? "ملاحظة جودة: البيانات الحالية قد لا تكفي لحكم عالي الثقة. اعتبر النتيجة استرشادية." : "")
+      : (dq?.smallN || dq?.sparseSeries ? "Data quality note: current data may be insufficient for high-confidence inference. Treat as indicative." : ""));
+
+  const actionTxt =
+    decision === "ALERT"
+      ? (lang === "ar"
+          ? "يوصى بمراجعة فورية: تأكيد جودة البيانات أولاً، ثم تحديد الفئات/المناطق الأكثر مساهمة، ومقارنة الأسابيع الأخيرة بالخط الأساسي."
+          : "Immediate review: validate data quality first, then inspect contributing subgroups/areas and compare recent weeks to baseline.")
+      : decision === "WATCH"
+      ? (lang === "ar"
+          ? "يوصى بالمتابعة القريبة خلال الأسابيع القادمة مع رفع حجم العينة لتحسين الثقة."
+          : "Close monitoring over coming weeks; increase sample size to improve confidence.")
+      : (lang === "ar"
+          ? "لا يوجد إجراء عاجل. الاستمرار في الرصد والمتابعة الدورية."
+          : "No urgent action. Continue routine monitoring.");
+
+  const title = lang === "ar" ? "تقرير سردي مبسّط (مبني على النتائج)" : "Public narrative (results-based)";
+
+  return [
+    `${title}`,
+    ``,
+    lang === "ar"
+      ? `تم تنفيذ تحليل ترصّد مبكر باستخدام بيانات مخبرية روتينية للفحص (${testCode}) ضمن نطاق (${scopeTxt}) خلال الفترة (${rangeTxt}).`
+      : `Early-warning surveillance analysis was performed on routine laboratory data for (${testCode}) within (${scopeTxt}) over (${rangeTxt}).`,
+    lang === "ar"
+      ? `الطرق المستخدمة: ${trustMethods}.`
+      : `Methods used: ${trustMethods}.`,
+    lang === "ar"
+      ? `الحالة الحالية: ${decisionLabel(decision, t)} • الاتجاه: ${trendLabel} • الثقة: ${confLabel}.`
+      : `Current status: ${decisionLabel(decision, t)} • Trend: ${trendLabel} • Confidence: ${confLabel}.`,
+    lang === "ar"
+      ? `معدل الإشارة (تقريبي حسب تعريف الحالة): ${rateTxt} (Cases=${casesTxt}, N=${overallN ?? "—"}).`
+      : `Signal rate (case-definition based): ${rateTxt} (Cases=${casesTxt}, N=${overallN ?? "—"}).`,
+    dqNote ? (lang === "ar" ? `\n${dqNote}` : `\n${dqNote}`) : "",
+    ``,
+    lang === "ar" ? `التوصية: ${actionTxt}` : `Recommendation: ${actionTxt}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildSpecialistNarrative({ lang, t, runData, testCode, derivedSignal, scopeMode, facilityId, regionId, preset }) {
+  const decision = String(runData?.consensus?.decision || "info").toUpperCase();
+  const perMethod = runData?.consensus?.perMethod || {};
+  const counts = runData?.consensus?.counts || {};
+  const dq = runData?.meta?.dataQuality || {};
+  const dr = runData?.meta?.dateRange || null;
+
+  const scopeTxt = scopeLabelHuman({ scopeMode, facilityId, regionId, t, lang });
+  const rangeTxt = safeDateRange(dr, lang);
+
+  const methodLines = Object.entries(perMethod).map(([m, x]) => {
+    const lvl = String(x?.alertLevel || "info").toUpperCase();
+    const conf = String(x?.confidenceLevel || "low").toUpperCase();
+    return `- ${String(m).toUpperCase()}: level=${lvl}, confidence=${conf}`;
+  });
+
+  const dqFlags = [];
+  if (dq?.smallN) dqFlags.push(lang === "ar" ? "حجم عينة منخفض" : "Low sample size");
+  if (dq?.sparseSeries) dqFlags.push(lang === "ar" ? "تغطية زمنية قصيرة" : "Short time coverage");
+
+  const dqTxt = dqFlags.length ? dqFlags.join(" • ") : (lang === "ar" ? "جودة مناسبة مبدئيًا" : "Reasonable quality (preliminary)");
+
+  const title = lang === "ar" ? "تقرير تفصيلي للمتخصصين (Decision Intelligence)" : "Specialist report (Decision Intelligence)";
+
+  return [
+    `${title}`,
+    ``,
+    lang === "ar"
+      ? `السياق: فحص=${testCode} • إشارة=${derivedSignal} • نطاق=${scopeTxt} • فترة=${rangeTxt} • Preset=${preset}.`
+      : `Context: Test=${testCode} • Signal=${derivedSignal} • Scope=${scopeTxt} • Period=${rangeTxt} • Preset=${preset}.`,
+    lang === "ar"
+      ? `قرار الإجماع: ${decisionLabel(decision, t)} (Alerts=${counts?.alert ?? 0}, Watch=${counts?.watch ?? 0}).`
+      : `Consensus decision: ${decisionLabel(decision, t)} (Alerts=${counts?.alert ?? 0}, Watch=${counts?.watch ?? 0}).`,
+    lang === "ar"
+      ? `تفصيل الطرق (Per-method adjudication):`
+      : `Per-method adjudication:`,
+    ...methodLines,
+    ``,
+    lang === "ar"
+      ? `مؤشرات جودة البيانات: N=${dq?.overallN ?? "—"} • WeeksCoverage=${dq?.weeksCoverage ?? "—"} • تقييم: ${dqTxt}.`
+      : `Data quality indicators: N=${dq?.overallN ?? "—"} • WeeksCoverage=${dq?.weeksCoverage ?? "—"} • Assessment: ${dqTxt}.`,
+    ``,
+    lang === "ar"
+      ? `تفسير مهني مختصر: يعتمد القرار على رصد انحرافات إحصائية في السلاسل الأسبوعية (EWMA/CUSUM) ومقارنة بالحدود العليا المتوقعة تاريخيًا (Farrington). عند وجود ALERT مع جودة بيانات محدودة، يوصى بالتحقق (Data validation) قبل أي استجابة تشغيلية.`
+      : `Clinical/epidemiologic interpretation: decision is driven by statistical aberration detection in weekly time series (EWMA/CUSUM) and historical expectation bounds (Farrington). If ALERT coexists with limited data quality, perform data validation before operational response.`,
+    lang === "ar"
+      ? `توصيات لصنّاع القرار:`
+      : `Decision-maker recommendations:`,
+    lang === "ar"
+      ? `1) Data QA/QC: تحقق من اكتمال الحقول، تكرار السجلات، والانحرافات القيمية (outliers).`
+      : `1) Data QA/QC: verify completeness, duplicates, and value outliers.`,
+    lang === "ar"
+      ? `2) Attribution: تحديد المرفق/المنطقة/الفئة العمرية الأكثر مساهمة عبر التقسيم السكاني.`
+      : `2) Attribution: identify highest-contributing facility/region/age band via stratification.`,
+    lang === "ar"
+      ? `3) Confirmation: مقارنة النتائج مع مؤشرات خارجية (زيارات طوارئ، بلاغات، فحوصات تأكيدية).`
+      : `3) Confirmation: triangulate with external indicators (ED visits, reports, confirmatory testing).`,
+  ].join("\n");
 }
 
 /* =========================
@@ -473,7 +723,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
   const [loading, setLoading] = useState(false);
   const [runData, setRunData] = useState(null);
-  const [reportText, setReportText] = useState("");
   const [errMsg, setErrMsg] = useState("");
   const [copied, setCopied] = useState(false);
 
@@ -489,11 +738,14 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   // technical details collapsed by default
   const [showDetails, setShowDetails] = useState(false);
 
-  // ✅ Uploads report UI state
+  // ✅ Uploads report UI state (kept)
   const [reportOpen, setReportOpen] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportErr, setReportErr] = useState("");
   const [reportData, setReportData] = useState(null);
+
+  // ✅ NEW: Narrative mode (public vs specialist)
+  const [narrativeMode, setNarrativeMode] = useState("public"); // "public" | "specialist"
 
   const abortRef = useRef(null);
 
@@ -564,17 +816,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     return params;
   }
 
-  function scopeLabel() {
-    if (scopeMode === "global") return t.modeGlobal;
-
-    const core =
-      scopeMode === "facility"
-        ? `${t.modeFacility}: ${facilityId?.trim() || t.notAvailable}`
-        : `${t.modeRegion}: ${regionId?.trim() || t.notAvailable}`;
-
-    return core;
-  }
-
   async function runAnalysis() {
     const m = selectedMethods();
     if (!m.length) return;
@@ -589,16 +830,13 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     }
 
     if (abortRef.current) {
-      try {
-        abortRef.current.abort();
-      } catch {}
+      try { abortRef.current.abort(); } catch {}
     }
     const controller = new AbortController();
     abortRef.current = controller;
 
     setLoading(true);
     setRunData(null);
-    setReportText("");
     setErrMsg("");
     setCopied(false);
     setChartsPayload(null);
@@ -607,7 +845,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     try {
       const scopeParams = buildScopeQuery();
 
-      // Run endpoint
+      // ✅ Run endpoint is the single source of truth for BOTH decision + narrative
       const runParams = new URLSearchParams(scopeParams);
       runParams.set("signal", derivedSignal);
       runParams.set("methods", m.join(","));
@@ -616,8 +854,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       const runJ = await fetchJSON(`${apiBase}/api/analytics/run?${runParams.toString()}`, controller.signal);
       setRunData(runJ?.data || null);
 
-      const dr1 = extractDateRange(runJ);
-      if (dr1) setDataRange(dr1);
+      // date range
+      const dr = runJ?.data?.meta?.dateRange || runJ?.data?.meta?.meta?.dateRange || null;
+      if (dr) setDataRange(dr);
 
       const results = runJ?.data?.results || {};
       setChartsPayload({
@@ -625,18 +864,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         cusum: results?.cusum ? { data: { cusum: results.cusum } } : null,
         farrington: results?.farrington ? { data: { farrington: results.farrington } } : null,
       });
-
-      // Report endpoint
-      const reportParams = new URLSearchParams(scopeParams);
-      reportParams.set("signal", derivedSignal);
-      reportParams.set("testCode", String(testCode));
-      reportParams.set("methods", m.join(","));
-      reportParams.set("lang", lang);
-
-      const repJ = await fetchJSON(`${apiBase}/api/analytics/report?${reportParams.toString()}`, controller.signal);
-      const extracted = extractReport(repJ?.data?.report, lang);
-      const finalReport = (extracted?.trim() ? extracted : "").trim();
-      setReportText(finalReport || t.insufficient);
 
       try {
         const hj = await fetchJSON(`${apiBase}/health`, controller.signal);
@@ -649,10 +876,10 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     }
   }
 
-  async function copyReport() {
-    if (!reportText) return;
+  async function copyNarrative(text) {
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(reportText);
+      await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch {}
@@ -673,24 +900,18 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     setFarringtonZ(p.farrington.z);
   }
 
-  // ✅ Reset: يرجع الصفحة لوضع "قبل Run"
   function resetRun() {
     if (abortRef.current) {
-      try {
-        abortRef.current.abort();
-      } catch {}
+      try { abortRef.current.abort(); } catch {}
     }
     setLoading(false);
     setRunData(null);
-    setReportText("");
     setErrMsg("");
     setCopied(false);
     setChartsPayload(null);
     setShowDetails(false);
-    // ما بنمسح الرفع، لأنه بيدعم "datasetReady" — إلا إذا بدك
   }
 
-  // ✅ Uploads report loader
   async function loadUploadsReport() {
     setReportLoading(true);
     setReportErr("");
@@ -732,8 +953,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const statusLabel = decision === "ALERT" ? t.alert : decision === "WATCH" ? t.watch : t.info;
 
   const trustMethods = methodsLabel(selectedMethods());
-
-  // ✅ dataset derived from lastUpload
   const dataset = lastUpload?.ok ? t.uploadOk : t.notAvailable;
 
   const ewCfg = adaptEWMA(chartsPayload?.ewma);
@@ -741,7 +960,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const faCfg = adaptFarrington(chartsPayload?.farrington);
 
   const presetLabel = preset === "low" ? t.presetLow : preset === "high" ? t.presetHigh : t.presetStandard;
-
   const canRunNow = !loading;
 
   // stratification
@@ -755,7 +973,13 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
   const overallN = profile?.overall?.n ?? 0;
   const overallRate = pickRate(profile?.overall);
-  const overallCases = pickCases(profile?.overall);
+  const overallCasesRaw = pickCases(profile?.overall);
+
+  // ✅ FIX: show cases properly (avoid "Cases=—" with 0%)
+  const overallCasesDisplay =
+    overallCasesRaw === null || typeof overallCasesRaw === "undefined"
+      ? (lang === "ar" ? "غير محسوبة" : "Not computed")
+      : String(overallCasesRaw);
 
   const whyText = (() => {
     const parts = [];
@@ -768,7 +992,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const actionsText = (() => {
     if (decision === "ALERT") {
       return lang === "ar"
-        ? "يوصى بمراجعة الوضع فورًا: تأكيد جودة البيانات، ثم فحص التقسيم السكاني والمرفق/المنطقة الأكثر مساهمة."
+        ? "يوصى بمراجعة الوضع فورًا: تأكيد جودة البيانات أولاً، ثم فحص التقسيم السكاني والمرفق/المنطقة الأكثر مساهمة."
         : "Immediate review recommended: validate data quality, then inspect subgroups and contributing facility/region.";
     }
     if (decision === "WATCH") {
@@ -780,6 +1004,41 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       ? "لا يوجد إجراء عاجل. الاستمرار في الرصد ورفع العينة لتحسين الثقة."
       : "No urgent action. Continue monitoring and grow sample size to improve confidence.";
   })();
+
+  // ✅ NEW: Consistent narrative derived from runData
+  const narrativePublic = useMemo(() => {
+    if (!runData) return "";
+    return buildPublicNarrative({
+      lang,
+      t,
+      runData,
+      testCode,
+      derivedSignal,
+      scopeMode,
+      facilityId,
+      regionId,
+      trustMethods,
+      trendLabel,
+      confLabel,
+    });
+  }, [runData, lang, t, testCode, derivedSignal, scopeMode, facilityId, regionId, trustMethods, trendLabel, confLabel]);
+
+  const narrativeSpecialist = useMemo(() => {
+    if (!runData) return "";
+    return buildSpecialistNarrative({
+      lang,
+      t,
+      runData,
+      testCode,
+      derivedSignal,
+      scopeMode,
+      facilityId,
+      regionId,
+      preset,
+    });
+  }, [runData, lang, t, testCode, derivedSignal, scopeMode, facilityId, regionId, preset]);
+
+  const narrativeText = narrativeMode === "specialist" ? narrativeSpecialist : narrativePublic;
 
   return (
     <div className="dash" dir={isRTL ? "rtl" : "ltr"}>
@@ -794,7 +1053,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* Initiative + Disclaimer */}
         <div className="infoGrid">
           <div className="infoCard">
             <div className="infoCardTitle">{t.initiativeTitle}</div>
@@ -806,7 +1064,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* ✅ Upload (ONE professional place) */}
         <div style={{ marginTop: 14 }}>
           <UploadCsv
             lang={lang}
@@ -823,22 +1080,19 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           />
         </div>
 
-        {/* Scope */}
         <div className="formRow" style={{ marginTop: 12 }}>
           <div className="field">
             <label>{t.scope}</label>
             <Dropdown dir={isRTL ? "rtl" : "ltr"} value={scopeMode} onChange={(v) => setScopeMode(v)} options={getScopeOptions(t)} />
           </div>
 
-          {/* ✅ Reports button here (instead of labId field) */}
           <div className="actions" style={{ alignSelf: "end" }}>
             <button type="button" className="ghostBtn" onClick={loadUploadsReport} disabled={reportLoading}>
-              {reportLoading ? (lang === "ar" ? "..." : "...") : (lang === "ar" ? "تقرير الرفعات" : "Uploads Report")}
+              {reportLoading ? "..." : (lang === "ar" ? "تقرير الرفعات" : "Uploads Report")}
             </button>
           </div>
         </div>
 
-        {/* Facility/Region + Test */}
         <div className="formRow">
           {scopeMode === "facility" ? (
             <div className="field">
@@ -853,7 +1107,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           ) : (
             <div className="field">
               <label>{isRTL ? "الكل" : "All"}</label>
-              <input value={t.modeGlobal} readOnly />
+              <input value={lang === "ar" ? "وطني (على مستوى الدولة)" : t.modeGlobal} readOnly />
             </div>
           )}
 
@@ -863,7 +1117,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* Signal (auto) + note */}
         <div className="formRow">
           <div className="field">
             <label>{t.signal}</label>
@@ -889,7 +1142,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* Time filter + Preset */}
         <div className="formRow">
           <div className="field">
             <label>{t.timeFilter}</label>
@@ -937,7 +1189,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* Advanced Panel */}
         <div
           className="advWrap"
           style={{
@@ -1070,7 +1321,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           ) : null}
         </div>
 
-        {/* Methods + Actions */}
         <div className="methodRow" style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 6 }}>
           <div className="field" style={{ flex: 1 }}>
             <label>{t.methods}</label>
@@ -1108,13 +1358,12 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               {lang === "ar" ? "Reset" : "Reset"}
             </button>
 
-            <button type="button" className="ghostBtn" onClick={copyReport} disabled={!reportText || loading}>
-              {copied ? t.copied : t.report}
+            <button type="button" className="ghostBtn" onClick={() => copyNarrative(narrativeText)} disabled={!runData || loading}>
+              {copied ? t.copied : (lang === "ar" ? "نسخ التقرير" : "Copy report")}
             </button>
           </div>
         </div>
 
-        {/* Errors */}
         {errMsg ? (
           <div className="muted" style={{ marginTop: 10 }}>
             {t.error} {safeText(errMsg)}
@@ -1126,7 +1375,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         ) : null}
 
-        {/* Trust / metadata */}
         <div className="miniGrid">
           <div className="mini">
             <div className="miniRow">
@@ -1135,7 +1383,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             </div>
             <div className="miniRow">
               <div className="miniKey">{t.scope}</div>
-              <div className="miniVal">{scopeLabel()}</div>
+              <div className="miniVal">{scopeLabelHuman({ scopeMode, facilityId, regionId, t, lang })}</div>
             </div>
           </div>
 
@@ -1152,7 +1400,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         </div>
       </section>
 
-      {/* ✅ النتائج مخفية بالكامل قبل Run */}
       {runData ? (
         <section className="grid">
           <div className="card cardWide" style={{ padding: 0, background: "transparent", border: "0" }}>
@@ -1173,7 +1420,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 <div>
                   <div className="statusTitle">{t.statusCardTitle}</div>
                   <div className="muted" style={{ marginTop: 6 }}>
-                    {t.testLabel}: <b>{testCode}</b> • {t.signalLabel}: <b>{derivedSignal}</b> • {t.scopeLabel}: <b>{scopeLabel()}</b>
+                    {t.testLabel}: <b>{testCode}</b> • {t.signalLabel}: <b>{derivedSignal}</b> • {t.scopeLabel}:{" "}
+                    <b>{scopeLabelHuman({ scopeMode, facilityId, regionId, t, lang })}</b>
                   </div>
                 </div>
 
@@ -1228,6 +1476,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   <div>
                     <b>{t.actions}</b> — {actionsText}
                   </div>
+                  <div>
+                    <b>{lang === "ar" ? "معدل الإشارة" : "Signal rate"}</b> — {fmtPct(overallRate)} (Cases={overallCasesDisplay}, N={overallN || "—"})
+                  </div>
                 </div>
 
                 <div className="actions" style={{ justifyContent: "flex-start", marginTop: 12 }}>
@@ -1239,11 +1490,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             </div>
           </div>
 
-          {/* Technical details are hidden by default */}
           {showDetails ? (
             <>
-              <DecisionCard title={lang === "ar" ? "قرار الإجماع (تفصيلي)" : "Consensus (details)"} value={upper(decision)} hint={t.empty} />
-
+             
               <div className="card cardWide">
                 <div className="cardHeader">
                   <div className="cardTitle">{t.chartsTitle}</div>
@@ -1259,7 +1508,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 </div>
               </div>
 
-              {/* Population Stratification */}
               <div className="card cardWide">
                 <div className="cardHeader">
                   <div className="cardTitle">{t.strat}</div>
@@ -1276,7 +1524,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                       </div>
                       <div className="miniRow">
                         <div className="miniKey">{t.cases}</div>
-                        <div className="miniVal">{overallCases ?? "—"}</div>
+                        <div className="miniVal">{overallCasesDisplay}</div>
                       </div>
                       <div className="miniRow">
                         <div className="miniKey">{t.signalRate}</div>
@@ -1287,7 +1535,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                     <div className="stratGrid">
                       <StratCard title={t.bySex} items={profile?.bySex || []} getKey={(it) => keyLabelSex(it?.sex)} t={t} />
                       <StratCard title={t.byAge} items={profile?.byAge || []} getKey={(it) => safeLabel(it?.ageBand)} t={t} />
-                      <StratCard title={t.byNationality} items={profile?.byNationality || []} getKey={(it) => safeLabel(it?.nationality)} t={t} />
+                      <StratCard title={t.byNationality} items={profile?.byNationality || []} getKey={(it) => nationalityLabel(it?.nationality, lang)} t={t} />
                     </div>
 
                     {insightText ? (
@@ -1299,24 +1547,45 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 )}
               </div>
 
-              {/* Narrative report */}
+              {/* ✅ Narrative report (Unified + Two modes) */}
               <div className="card cardWide">
                 <div className="cardHeader">
-                  <div className="cardTitle">{t.narrative}</div>
+                  <div className="cardTitle">{lang === "ar" ? "التقرير السردي (موحّد مع قرار الحالة)" : "Narrative report (aligned with status)"}</div>
                 </div>
 
-                <div className="reportBox2" dir={isRTL ? "rtl" : "ltr"} style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: 12, borderRadius: 12, minHeight: 180 }}>
-                  {reportText || t.empty}
+                <div className="segTabs">
+                  <button
+                    className={`segBtn ${narrativeMode === "public" ? "segBtnOn" : ""}`}
+                    onClick={() => setNarrativeMode("public")}
+                    type="button"
+                  >
+                    {lang === "ar" ? "مبسّط" : "Public"}
+                  </button>
+                  <button
+                    className={`segBtn ${narrativeMode === "specialist" ? "segBtnOn" : ""}`}
+                    onClick={() => setNarrativeMode("specialist")}
+                    type="button"
+                  >
+                    {lang === "ar" ? "متخصص" : "Specialist"}
+                  </button>
                 </div>
 
-                {!reportText ? <div className="muted" style={{ marginTop: 8 }}>{t.insufficient}</div> : null}
+                <div className="reportBox2" dir={isRTL ? "rtl" : "ltr"} style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: 12, borderRadius: 12, minHeight: 180, marginTop: 10 }}>
+                  {narrativeText || t.empty}
+                </div>
+
+                <div className="muted" style={{ marginTop: 10 }}>
+                  {lang === "ar"
+                    ? "ملاحظة: هذا التقرير مبني مباشرة على نتائج RUN لتجنب أي تناقض بين حالة الإنذار والسرد."
+                    : "Note: this narrative is built directly from RUN results to avoid status/report mismatch."}
+                </div>
               </div>
             </>
           ) : null}
         </section>
       ) : null}
 
-      {/* ✅ Uploads Report Modal */}
+      {/* ✅ Uploads Report Modal (unchanged UI) */}
       {reportOpen ? (
         <div className="modalOverlay" onMouseDown={() => setReportOpen(false)}>
           <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
@@ -1365,22 +1634,24 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               {Array.isArray(reportData?.byTest) && reportData.byTest.length ? (
                 <>
                   <div className="cardTitle" style={{ marginBottom: 8 }}>{lang === "ar" ? "حسب الفحص" : "By test"}</div>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>{lang === "ar" ? "الفحص" : "Test"}</th>
-                        <th>{lang === "ar" ? "العدد" : "Count"}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {reportData.byTest.slice(0, 200).map((r, idx) => (
-                        <tr key={idx}>
-                          <td>{r.testCode}</td>
-                          <td>{r.n}</td>
+                  <div className="tableWrap">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th>{lang === "ar" ? "الفحص" : "Test"}</th>
+                          <th>{lang === "ar" ? "العدد" : "Count"}</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {reportData.byTest.slice(0, 200).map((r, idx) => (
+                          <tr key={idx}>
+                            <td>{r.testCode}</td>
+                            <td>{r.n}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </>
               ) : null}
 
@@ -1389,24 +1660,26 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               {Array.isArray(reportData?.facilities) && reportData.facilities.length ? (
                 <>
                   <div className="cardTitle" style={{ marginBottom: 8 }}>{lang === "ar" ? "المرافق" : "Facilities"}</div>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>{lang === "ar" ? "رمز المرفق" : "Facility ID"}</th>
-                        <th>{lang === "ar" ? "اسم المرفق" : "Facility name"}</th>
-                        <th>{lang === "ar" ? "عدد الفحوصات" : "Tests"}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {reportData.facilities.slice(0, 200).map((r, idx) => (
-                        <tr key={idx}>
-                          <td>{r.facilityId}</td>
-                          <td>{r.facilityName || "—"}</td>
-                          <td>{r.n}</td>
+                  <div className="tableWrap">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th>{lang === "ar" ? "رمز المرفق" : "Facility ID"}</th>
+                          <th>{lang === "ar" ? "اسم المرفق" : "Facility name"}</th>
+                          <th>{lang === "ar" ? "عدد الفحوصات" : "Tests"}</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {reportData.facilities.slice(0, 200).map((r, idx) => (
+                          <tr key={idx}>
+                            <td>{r.facilityId}</td>
+                            <td>{r.facilityName || "—"}</td>
+                            <td>{r.n}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </>
               ) : null}
 
@@ -1415,24 +1688,26 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               {Array.isArray(reportData?.regions) && reportData.regions.length ? (
                 <>
                   <div className="cardTitle" style={{ marginBottom: 8 }}>{lang === "ar" ? "المناطق" : "Regions"}</div>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>{lang === "ar" ? "رمز المنطقة" : "Region ID"}</th>
-                        <th>{lang === "ar" ? "اسم المنطقة" : "Region name"}</th>
-                        <th>{lang === "ar" ? "عدد الفحوصات" : "Tests"}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {reportData.regions.slice(0, 200).map((r, idx) => (
-                        <tr key={idx}>
-                          <td>{r.regionId}</td>
-                          <td>{r.regionName || "—"}</td>
-                          <td>{r.n}</td>
+                  <div className="tableWrap">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th>{lang === "ar" ? "رمز المنطقة" : "Region ID"}</th>
+                          <th>{lang === "ar" ? "اسم المنطقة" : "Region name"}</th>
+                          <th>{lang === "ar" ? "عدد الفحوصات" : "Tests"}</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {reportData.regions.slice(0, 200).map((r, idx) => (
+                          <tr key={idx}>
+                            <td>{r.regionId}</td>
+                            <td>{r.regionName || "—"}</td>
+                            <td>{r.n}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </>
               ) : null}
             </div>
