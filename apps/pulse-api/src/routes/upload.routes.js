@@ -17,6 +17,9 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
 });
 
+/* =========================
+   Helpers
+   ========================= */
 function normalizeHeader(h) {
   return String(h || "").trim().toLowerCase();
 }
@@ -67,17 +70,18 @@ function getISOWeekInfo(dateObj) {
   return { year, isoWeek, yearWeek };
 }
 
-/**
- * POST /api/upload/csv
- * Universal CSV template (recommended):
- * collectedAt,testCode,value,unit,sex,ageYears,nationality,facilityId,facilityName,regionId,regionName,labId,patientKey
- *
- * facilityId/regionId/labId are OPTIONAL. If both facilityId and regionId empty => GLOBAL.
- * Supports any testCode.
- *
- * Legacy supported:
- * facilityId,testDate,hb(or hgb),sex,ageYears
- */
+/* =========================================================
+   POST /api/upload/csv
+   Universal CSV template (recommended):
+   collectedAt,testCode,value,unit,sex,ageYears,nationality,
+   facilityId,facilityName,regionId,regionName,labId,patientKey
+
+   facilityId/regionId/labId OPTIONAL — if empty => accepted (GLOBAL).
+   Supports any testCode.
+
+   Legacy supported:
+   facilityId,testDate,hb(or hgb),sex,ageYears
+   ========================================================= */
 router.post("/csv", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
@@ -153,6 +157,7 @@ router.post("/csv", upload.single("file"), async (req, res) => {
     }
 
     // ✅ Create Upload record first (audit trail)
+    // IMPORTANT: make arrays explicit so mongoose won't mis-cast defaults.
     const uploadDoc = await Upload.create({
       originalFileName: req.file.originalname,
       fileName: req.file.originalname,
@@ -161,6 +166,11 @@ router.post("/csv", upload.single("file"), async (req, res) => {
       sha256: fileHash,
       rowsParsed: records.length,
       source: "CSV",
+      uploadedAt: new Date(),
+
+      facilityIds: [],
+      regionIds: [],
+      labIds: [],
     });
 
     let total = 0;
@@ -178,11 +188,15 @@ router.post("/csv", upload.single("file"), async (req, res) => {
     const docs = [];
     const seen = new Set();
 
+    // for Upload doc metadata counts
+    const facilitySet = new Set();
+    const regionSet = new Set();
+    const labSet = new Set();
+
     for (const r of records) {
       total++;
 
       // ===== UNIVERSAL / NEW SCHEMA =====
-      // Supports any testCode, optional facility/region/lab, and optional nationality.
       if (hasNew) {
         const testCode = normalizeTestCode(r.testcode);
         const value = toNumber(r.value);
@@ -232,9 +246,14 @@ router.post("/csv", upload.single("file"), async (req, res) => {
 
         const { year, isoWeek, yearWeek } = getISOWeekInfo(collectedAt);
 
+        // dedupe within file
         const key = `${facilityId || ""}|${regionId || ""}|${labId || ""}|${testCode}|${collectedAt.toISOString()}|${sex}|${ageYears}|${value}`;
         if (seen.has(key)) continue;
         seen.add(key);
+
+        if (facilityId) facilitySet.add(facilityId);
+        if (regionId) regionSet.add(regionId);
+        if (labId) labSet.add(labId);
 
         docs.push({
           uploadId: uploadDoc._id,
@@ -298,6 +317,8 @@ router.post("/csv", upload.single("file"), async (req, res) => {
         if (seen.has(key)) continue;
         seen.add(key);
 
+        if (facilityId) facilitySet.add(facilityId);
+
         docs.push({
           uploadId: uploadDoc._id,
 
@@ -334,7 +355,7 @@ router.post("/csv", upload.single("file"), async (req, res) => {
       await LabResult.insertMany(docs, { ordered: false });
     }
 
-    // update weekly aggregates (if your service supports generic testCode, this works for all)
+    // update weekly aggregates
     let weeklyAgg = null;
     try {
       weeklyAgg = await updateWeeklyAggregatesFromDocs(docs);
@@ -342,12 +363,18 @@ router.post("/csv", upload.single("file"), async (req, res) => {
       console.warn("weeklyAgg update skipped/failed:", e?.message || e);
     }
 
+    // ✅ update Upload record (match Upload model fields)
     await Upload.updateOne(
       { _id: uploadDoc._id },
       {
         $set: {
+          rowsParsed: total,
           rowsAccepted: accepted,
           rowsRejected: rejected,
+          facilityIds: Array.from(facilitySet),
+          regionIds: Array.from(regionSet),
+          labIds: Array.from(labSet),
+          quality: issues,
           completedAt: new Date(),
         },
       }
@@ -385,6 +412,116 @@ router.post("/csv", upload.single("file"), async (req, res) => {
     console.error("UPLOAD error:", err);
     return res.status(500).json(
       apiError({ status: 500, error: "Server error", details: err.message })
+    );
+  }
+});
+
+/* =========================================================
+   GET /api/upload/report
+   تقرير كامل:
+   - totals: files, tests, facilities, regions
+   - byTest: counts per testCode (clean + includes unknown)
+   - facilities: top facilities by rows
+   - regions: top regions by rows
+   - uploads: last uploads snapshot (optional helpful)
+   ========================================================= */
+router.get("/report", async (req, res) => {
+  try {
+    const files = await Upload.countDocuments();
+    const tests = await LabResult.countDocuments();
+
+    const facilityIds = await LabResult.distinct("facilityId", { facilityId: { $ne: null } });
+    const regionIds = await LabResult.distinct("regionId", { regionId: { $ne: null } });
+
+    // ✅ byTest: ensure null/empty test codes appear as "UNKNOWN"
+    const byTest = await LabResult.aggregate([
+      {
+        $project: {
+          testCodeNorm: {
+            $cond: [
+              {
+                $or: [
+                  { $eq: ["$testCode", null] },
+                  { $eq: ["$testCode", ""] },
+                ],
+              },
+              "UNKNOWN",
+              { $toUpper: "$testCode" },
+            ],
+          },
+        },
+      },
+      { $group: { _id: "$testCodeNorm", n: { $sum: 1 } } },
+      { $sort: { n: -1 } },
+      { $project: { _id: 0, testCode: "$_id", n: 1 } },
+    ]);
+
+    const facilities = await LabResult.aggregate([
+      { $match: { facilityId: { $ne: null } } },
+      {
+        $group: {
+          _id: "$facilityId",
+          facilityName: { $last: "$facilityName" },
+          n: { $sum: 1 },
+        },
+      },
+      { $sort: { n: -1 } },
+      { $project: { _id: 0, facilityId: "$_id", facilityName: 1, n: 1 } },
+      { $limit: 500 },
+    ]);
+
+    const regions = await LabResult.aggregate([
+      { $match: { regionId: { $ne: null } } },
+      {
+        $group: {
+          _id: "$regionId",
+          regionName: { $last: "$regionName" },
+          n: { $sum: 1 },
+        },
+      },
+      { $sort: { n: -1 } },
+      { $project: { _id: 0, regionId: "$_id", regionName: 1, n: 1 } },
+      { $limit: 500 },
+    ]);
+
+    // recent uploads snapshot (helps debug + UI)
+    const uploads = await Upload.find({})
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .select({
+        originalFileName: 1,
+        fileName: 1,
+        sizeBytes: 1,
+        rowsParsed: 1,
+        rowsAccepted: 1,
+        rowsRejected: 1,
+        facilityIds: 1,
+        regionIds: 1,
+        labIds: 1,
+        createdAt: 1,
+        completedAt: 1,
+      })
+      .lean();
+
+    return res.json(
+      apiOk({
+        data: {
+          totals: {
+            files,
+            tests,
+            facilities: facilityIds.length,
+            regions: regionIds.length,
+          },
+          byTest,
+          facilities,
+          regions,
+          uploads,
+        },
+      })
+    );
+  } catch (err) {
+    return res.status(500).json(
+      apiError({ status: 500, error: "Report failed", details: err?.message })
     );
   }
 });

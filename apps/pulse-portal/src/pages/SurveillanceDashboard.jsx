@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import DecisionCard from "../components/DecisionCard.jsx";
 import SimpleSeriesChart from "../components/SimpleSeriesChart.jsx";
+import UploadCsv from "../components/UploadCsv.jsx";
 
 import {
   TXT,
@@ -14,14 +15,10 @@ import {
   safeText,
   clampNum,
   clampInt,
-  toNum,
-  normalizeRate,
   fmtPct,
-  fmtBytes,
   extractDateRange,
   extractReport,
   fetchJSON,
-  postFile,
   normalizeDateRange,
   pickRate,
   pickCases,
@@ -35,7 +32,6 @@ import {
   Dropdown,
   ParamSlider,
 } from "./surveillance/index.js";
-
 
 /* =========================
    ✅ Styles (Global-ish look)
@@ -147,25 +143,6 @@ const styles = `
     font-size: 12px;
   }
 
-  .banner{
-    margin-top: 10px;
-    border-radius: 14px;
-    padding: 12px;
-    background: rgba(16,185,129,0.10);
-    border: 1px solid rgba(16,185,129,0.28);
-  }
-  .bannerTitle{ font-weight: 950; margin-bottom: 6px; }
-  .bannerGrid{ display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .bannerBox{
-    border-radius: 12px;
-    padding: 10px 12px;
-    background: rgba(0,0,0,0.14);
-    border: 1px solid rgba(255,255,255,0.10);
-    font-size: 12px;
-    line-height: 1.7;
-  }
-  .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-
   .statusCard{
     border-radius: 20px;
     padding: 18px;
@@ -266,6 +243,53 @@ const styles = `
     background: linear-gradient(90deg, rgba(16,185,129,0.95), rgba(245,158,11,0.92), rgba(239,68,68,0.92));
   }
 
+  /* Modal */
+  .modalOverlay{
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(6px);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding: 16px;
+    z-index: 9999;
+  }
+  .modal{
+    width: min(980px, 100%);
+    border-radius: 18px;
+    background: rgba(12,18,32,0.92);
+    border: 1px solid rgba(255,255,255,0.14);
+    box-shadow: 0 18px 60px rgba(0,0,0,0.45);
+    overflow:hidden;
+  }
+  .modalHeader{
+    display:flex;
+    justify-content:space-between;
+    gap: 10px;
+    align-items:flex-start;
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.10);
+  }
+  .modalTitle{ font-weight: 950; }
+  .modalBody{ padding: 14px 16px; }
+  .table{
+    width: 100%;
+    border-collapse: collapse;
+    overflow:hidden;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+  .table th, .table td{
+    padding: 10px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    font-size: 12px;
+    text-align: start;
+    vertical-align: top;
+  }
+  .table th{ font-weight: 950; background: rgba(255,255,255,0.06); }
+  .table tr:last-child td{ border-bottom: 0; }
+
   .footer{
     margin-top: 4px;
     border-radius: 18px;
@@ -291,7 +315,6 @@ const styles = `
     .primaryBtn,.ghostBtn,.dangerBtn,.linkBtn{ width:100%; }
     .miniVal{ text-align: start; }
     .statusMain{ grid-template-columns: 1fr; }
-    .bannerGrid{ grid-template-columns: 1fr; }
   }
 `;
 
@@ -321,19 +344,9 @@ function computeConfidence(meta) {
   const overallN = dq?.overallN ?? dq?.n ?? null;
   const weeksCoverage = dq?.weeksCoverage ?? dq?.weeks ?? null;
 
-  if (
-    typeof overallN === "number" &&
-    overallN >= 200 &&
-    typeof weeksCoverage === "number" &&
-    weeksCoverage >= 12
-  )
+  if (typeof overallN === "number" && overallN >= 200 && typeof weeksCoverage === "number" && weeksCoverage >= 12)
     return "high";
-  if (
-    typeof overallN === "number" &&
-    overallN >= 60 &&
-    typeof weeksCoverage === "number" &&
-    weeksCoverage >= 6
-  )
+  if (typeof overallN === "number" && overallN >= 60 && typeof weeksCoverage === "number" && weeksCoverage >= 6)
     return "med";
   return "low";
 }
@@ -377,10 +390,7 @@ function StratCard({ title, items, getKey, t }) {
                 <div className="rowPct">{pct}</div>
               </div>
 
-              <div
-                className="bar"
-                title={`${t.cases}: ${pickCases(it) ?? "—"} • ${t.signalRate}: ${pct}`}
-              >
+              <div className="bar" title={`${t.cases}: ${pickCases(it) ?? "—"} • ${t.signalRate}: ${pct}`}>
                 <div
                   className="fill"
                   style={{
@@ -409,22 +419,15 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     import.meta.env.VITE_API_URL ||
     "http://localhost:4000";
 
-  // ✅ Start Global + empty inputs
+  // ✅ Scope (no LabId anymore)
   const [scopeMode, setScopeMode] = useState("global");
   const [facilityId, setFacilityId] = useState("");
   const [regionId, setRegionId] = useState("");
-  const [labId, setLabId] = useState("");
 
   // ✅ Test selection
   const [testCode, setTestCode] = useState("HB");
-  const derivedSignal = useMemo(
-    () => getSignalForTest(testCode),
-    [testCode]
-  );
-  const derivedSignalLabel = useMemo(
-    () => getSignalLabel(t, derivedSignal),
-    [t, derivedSignal]
-  );
+  const derivedSignal = useMemo(() => getSignalForTest(testCode), [testCode]);
+  const derivedSignalLabel = useMemo(() => getSignalLabel(t, derivedSignal), [t, derivedSignal]);
 
   // ✅ Methods
   const [methods, setMethods] = useState({
@@ -443,22 +446,14 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
   const [ewmaLambda, setEwmaLambda] = useState(PRESETS.standard.ewma.lambda);
   const [ewmaL, setEwmaL] = useState(PRESETS.standard.ewma.L);
-  const [ewmaBaselineN, setEwmaBaselineN] = useState(
-    PRESETS.standard.ewma.baselineN
-  );
+  const [ewmaBaselineN, setEwmaBaselineN] = useState(PRESETS.standard.ewma.baselineN);
 
-  const [cusumBaselineN, setCusumBaselineN] = useState(
-    PRESETS.standard.cusum.baselineN
-  );
+  const [cusumBaselineN, setCusumBaselineN] = useState(PRESETS.standard.cusum.baselineN);
   const [cusumK, setCusumK] = useState(PRESETS.standard.cusum.k);
   const [cusumH, setCusumH] = useState(PRESETS.standard.cusum.h);
 
-  const [farringtonBaselineWeeks, setFarringtonBaselineWeeks] = useState(
-    PRESETS.standard.farrington.baselineWeeks
-  );
-  const [farringtonZ, setFarringtonZ] = useState(
-    PRESETS.standard.farrington.z
-  );
+  const [farringtonBaselineWeeks, setFarringtonBaselineWeeks] = useState(PRESETS.standard.farrington.baselineWeeks);
+  const [farringtonZ, setFarringtonZ] = useState(PRESETS.standard.farrington.z);
 
   useEffect(() => {
     if (advanced) return;
@@ -488,14 +483,17 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   // Charts payload from RUN (general)
   const [chartsPayload, setChartsPayload] = useState(null);
 
-  // Upload
-  const [uploadFile, setUploadFile] = useState(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadErr, setUploadErr] = useState("");
-  const [uploadResult, setUploadResult] = useState(null);
+  // ✅ Upload state from UploadCsv component (normalized payload)
+  const [lastUpload, setLastUpload] = useState(null);
 
   // technical details collapsed by default
   const [showDetails, setShowDetails] = useState(false);
+
+  // ✅ Uploads report UI state
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportErr, setReportErr] = useState("");
+  const [reportData, setReportData] = useState(null);
 
   const abortRef = useRef(null);
 
@@ -538,9 +536,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       params.set("regionId", String(regionId || "").trim());
     }
 
-    const lab = String(labId || "").trim();
-    if (lab) params.set("labId", lab);
-
     const norm = normalizeDateRange(startDate, endDate);
     if (norm.start) params.set("startDate", norm.start);
     if (norm.end) params.set("endDate", norm.end);
@@ -551,44 +546,19 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     if (advanced) {
       params.set("advanced", "1");
 
-      params.set(
-        "ewmaLambda",
-        String(clampNum(ewmaLambda, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max))
-      );
-      params.set(
-        "ewmaL",
-        String(clampNum(ewmaL, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max))
-      );
-      params.set(
-        "ewmaBaselineN",
-        String(clampInt(ewmaBaselineN, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max))
-      );
+      params.set("ewmaLambda", String(clampNum(ewmaLambda, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max)));
+      params.set("ewmaL", String(clampNum(ewmaL, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max)));
+      params.set("ewmaBaselineN", String(clampInt(ewmaBaselineN, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max)));
 
-      params.set(
-        "cusumBaselineN",
-        String(clampInt(cusumBaselineN, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max))
-      );
-      params.set(
-        "cusumK",
-        String(clampNum(cusumK, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max))
-      );
-      params.set(
-        "cusumH",
-        String(clampNum(cusumH, BOUNDS.cusum.h.min, BOUNDS.cusum.h.max))
-      );
+      params.set("cusumBaselineN", String(clampInt(cusumBaselineN, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max)));
+      params.set("cusumK", String(clampNum(cusumK, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max)));
+      params.set("cusumH", String(clampNum(cusumH, BOUNDS.cusum.h.min, BOUNDS.cusum.h.max)));
 
       params.set(
         "farringtonBaselineWeeks",
-        String(clampInt(
-          farringtonBaselineWeeks,
-          BOUNDS.farrington.baselineWeeks.min,
-          BOUNDS.farrington.baselineWeeks.max
-        ))
+        String(clampInt(farringtonBaselineWeeks, BOUNDS.farrington.baselineWeeks.min, BOUNDS.farrington.baselineWeeks.max))
       );
-      params.set(
-        "farringtonZ",
-        String(clampNum(farringtonZ, BOUNDS.farrington.z.min, BOUNDS.farrington.z.max))
-      );
+      params.set("farringtonZ", String(clampNum(farringtonZ, BOUNDS.farrington.z.min, BOUNDS.farrington.z.max)));
     }
 
     return params;
@@ -602,38 +572,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         ? `${t.modeFacility}: ${facilityId?.trim() || t.notAvailable}`
         : `${t.modeRegion}: ${regionId?.trim() || t.notAvailable}`;
 
-    const lab = labId?.trim()
-      ? isRTL
-        ? ` • المختبر: ${labId.trim()}`
-        : ` • Lab: ${labId.trim()}`
-      : "";
-
-    return core + lab;
-  }
-
-  async function uploadCsv() {
-    if (!uploadFile) return;
-
-    setUploading(true);
-    setUploadErr("");
-    setUploadResult(null);
-
-    try {
-      const j = await postFile(`${apiBase}/api/upload/csv`, uploadFile);
-      setUploadResult(j);
-
-      const dr = extractDateRange(j);
-      if (dr) setDataRange(dr);
-
-      try {
-        const hj = await fetchJSON(`${apiBase}/health`);
-        setLastUpdated(hj?.time || hj?.timestamp || null);
-      } catch {}
-    } catch (e) {
-      setUploadErr(String(e?.message || e));
-    } finally {
-      setUploading(false);
-    }
+    return core;
   }
 
   async function runAnalysis() {
@@ -650,7 +589,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     }
 
     if (abortRef.current) {
-      try { abortRef.current.abort(); } catch {}
+      try {
+        abortRef.current.abort();
+      } catch {}
     }
     const controller = new AbortController();
     abortRef.current = controller;
@@ -661,6 +602,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     setErrMsg("");
     setCopied(false);
     setChartsPayload(null);
+    setShowDetails(false);
 
     try {
       const scopeParams = buildScopeQuery();
@@ -671,10 +613,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       runParams.set("methods", m.join(","));
       runParams.set("lang", "both");
 
-      const runJ = await fetchJSON(
-        `${apiBase}/api/analytics/run?${runParams.toString()}`,
-        controller.signal
-      );
+      const runJ = await fetchJSON(`${apiBase}/api/analytics/run?${runParams.toString()}`, controller.signal);
       setRunData(runJ?.data || null);
 
       const dr1 = extractDateRange(runJ);
@@ -684,9 +623,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       setChartsPayload({
         ewma: results?.ewma ? { data: { ewma: results.ewma } } : null,
         cusum: results?.cusum ? { data: { cusum: results.cusum } } : null,
-        farrington: results?.farrington
-          ? { data: { farrington: results.farrington } }
-          : null,
+        farrington: results?.farrington ? { data: { farrington: results.farrington } } : null,
       });
 
       // Report endpoint
@@ -696,10 +633,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       reportParams.set("methods", m.join(","));
       reportParams.set("lang", lang);
 
-      const repJ = await fetchJSON(
-        `${apiBase}/api/analytics/report?${reportParams.toString()}`,
-        controller.signal
-      );
+      const repJ = await fetchJSON(`${apiBase}/api/analytics/report?${reportParams.toString()}`, controller.signal);
       const extracted = extractReport(repJ?.data?.report, lang);
       const finalReport = (extracted?.trim() ? extracted : "").trim();
       setReportText(finalReport || t.insufficient);
@@ -739,17 +673,47 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     setFarringtonZ(p.farrington.z);
   }
 
-  // ✅ Derived view model
+  // ✅ Reset: يرجع الصفحة لوضع "قبل Run"
+  function resetRun() {
+    if (abortRef.current) {
+      try {
+        abortRef.current.abort();
+      } catch {}
+    }
+    setLoading(false);
+    setRunData(null);
+    setReportText("");
+    setErrMsg("");
+    setCopied(false);
+    setChartsPayload(null);
+    setShowDetails(false);
+    // ما بنمسح الرفع، لأنه بيدعم "datasetReady" — إلا إذا بدك
+  }
+
+  // ✅ Uploads report loader
+  async function loadUploadsReport() {
+    setReportLoading(true);
+    setReportErr("");
+    try {
+      const j = await fetchJSON(`${apiBase}/api/upload/report`);
+      setReportData(j?.data || null);
+      setReportOpen(true);
+    } catch (e) {
+      setReportErr(String(e?.message || e));
+      setReportData(null);
+      setReportOpen(true);
+    } finally {
+      setReportLoading(false);
+    }
+  }
+
+  // ✅ Derived view model (only after runData exists)
   const consensus = runData?.consensus;
   const decision = upper(consensus?.decision || "info");
   const theme = decisionTheme(decision);
   const decisionKey = theme.key;
 
-  const weekly =
-    runData?.meta?.weekly ||
-    runData?.meta?.meta?.weekly ||
-    runData?.weekly ||
-    null;
+  const weekly = runData?.meta?.weekly || runData?.meta?.meta?.weekly || runData?.weekly || null;
 
   const trendKey = computeTrendFromWeekly(weekly);
   const confidenceKey = computeConfidence(runData?.meta || runData?.meta?.meta || runData?.meta);
@@ -763,27 +727,22 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       ? t.trendFlat
       : t.trendNoData;
 
-  const confLabel =
-    confidenceKey === "high"
-      ? t.confHigh
-      : confidenceKey === "med"
-      ? t.confMed
-      : t.confLow;
+  const confLabel = confidenceKey === "high" ? t.confHigh : confidenceKey === "med" ? t.confMed : t.confLow;
 
-  const statusLabel =
-    decision === "ALERT" ? t.alert : decision === "WATCH" ? t.watch : t.info;
+  const statusLabel = decision === "ALERT" ? t.alert : decision === "WATCH" ? t.watch : t.info;
 
   const trustMethods = methodsLabel(selectedMethods());
-  const dataset = uploadResult?.ok ? t.uploadOk : t.notAvailable;
+
+  // ✅ dataset derived from lastUpload
+  const dataset = lastUpload?.ok ? t.uploadOk : t.notAvailable;
 
   const ewCfg = adaptEWMA(chartsPayload?.ewma);
   const cuCfg = adaptCUSUM(chartsPayload?.cusum);
   const faCfg = adaptFarrington(chartsPayload?.farrington);
 
-  const presetLabel =
-    preset === "low" ? t.presetLow : preset === "high" ? t.presetHigh : t.presetStandard;
+  const presetLabel = preset === "low" ? t.presetLow : preset === "high" ? t.presetHigh : t.presetStandard;
 
-  const canRunNow = !loading && !uploading;
+  const canRunNow = !loading;
 
   // stratification
   const profile = runData?.profile || null;
@@ -822,29 +781,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       : "No urgent action. Continue monitoring and grow sample size to improve confidence.";
   })();
 
-  const uploadSummary = useMemo(() => {
-    if (!uploadResult || !uploadResult.ok) return null;
-    const known = [
-      "inserted",
-      "insertedCount",
-      "updated",
-      "updatedCount",
-      "updatedWeeks",
-      "skipped",
-      "duplicates",
-      "errors",
-      "message",
-      "range",
-      "dateRange",
-    ];
-    const out = {};
-    for (const k of known) {
-      if (uploadResult?.[k] !== undefined) out[k] = uploadResult[k];
-      if (uploadResult?.data?.[k] !== undefined) out[`data.${k}`] = uploadResult.data[k];
-    }
-    return out;
-  }, [uploadResult]);
-
   return (
     <div className="dash" dir={isRTL ? "rtl" : "ltr"}>
       <style>{styles}</style>
@@ -870,93 +806,35 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* Upload */}
-        <div className="formRow" style={{ marginTop: 14 }}>
-          <div className="field">
-            <label>{t.uploadTitle}</label>
-            <input
-              type="file"
-              accept=".csv"
-              onChange={(e) => {
-                setUploadFile(e.target.files?.[0] || null);
-                setUploadErr("");
-                setUploadResult(null);
-              }}
-            />
-          </div>
-          <div className="actions" style={{ alignSelf: "end" }}>
-            <button
-              type="button"
-              className="ghostBtn"
-              onClick={uploadCsv}
-              disabled={!uploadFile || uploading}
-            >
-              {uploading ? t.uploading : t.upload}
-            </button>
-          </div>
+        {/* ✅ Upload (ONE professional place) */}
+        <div style={{ marginTop: 14 }}>
+          <UploadCsv
+            lang={lang}
+            onUploaded={(payload) => {
+              setLastUpload(payload);
+
+              const dr = payload?.dateRange;
+              if (dr?.start || dr?.end) setDataRange(dr);
+
+              fetchJSON(`${apiBase}/health`)
+                .then((hj) => setLastUpdated(hj?.time || hj?.timestamp || null))
+                .catch(() => {});
+            }}
+          />
         </div>
 
-        {uploadErr ? (
-          <div className="muted" style={{ marginTop: 6 }}>
-            {uploadErr}
-          </div>
-        ) : null}
-
-        {uploadResult?.ok ? (
-          <div className="banner">
-            <div className="bannerTitle">✅ {t.uploadOk}</div>
-            <div className="bannerGrid">
-              <div className="bannerBox">
-                <div style={{ fontWeight: 950, marginBottom: 6 }}>{t.uploadMeta}</div>
-                <div>
-                  <span style={{ opacity: 0.8 }}>{t.fileName}: </span>
-                  <span className="mono">{uploadFile?.name || "—"}</span>
-                </div>
-                <div>
-                  <span style={{ opacity: 0.8 }}>{t.fileSize}: </span>
-                  <span className="mono">{fmtBytes(uploadFile?.size)}</span>
-                </div>
-                {dataRange?.start || dataRange?.end ? (
-                  <div style={{ marginTop: 6, opacity: 0.9 }}>
-                    <span style={{ opacity: 0.8 }}>
-                      {isRTL ? "النطاق الزمني:" : "Date range:"}{" "}
-                    </span>
-                    <span className="mono">
-                      {safeText(dataRange?.start)} → {safeText(dataRange?.end)}
-                    </span>
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="bannerBox">
-                <div style={{ fontWeight: 950, marginBottom: 6 }}>{t.serverSummary}</div>
-                <pre className="mono" style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-                  {JSON.stringify(uploadSummary || uploadResult, null, 2)}
-                </pre>
-              </div>
-            </div>
-          </div>
-        ) : null}
-
-        {/* Scope + Lab */}
+        {/* Scope */}
         <div className="formRow" style={{ marginTop: 12 }}>
           <div className="field">
             <label>{t.scope}</label>
-            <Dropdown
-              dir={isRTL ? "rtl" : "ltr"}
-              value={scopeMode}
-              onChange={(v) => setScopeMode(v)}
-              options={getScopeOptions(t)}
-            />
+            <Dropdown dir={isRTL ? "rtl" : "ltr"} value={scopeMode} onChange={(v) => setScopeMode(v)} options={getScopeOptions(t)} />
           </div>
 
-          <div className="field">
-            <label>{t.lab}</label>
-            <input
-              value={labId}
-              onChange={(e) => setLabId(e.target.value)}
-              placeholder={t.placeholderLab}
-            />
+          {/* ✅ Reports button here (instead of labId field) */}
+          <div className="actions" style={{ alignSelf: "end" }}>
+            <button type="button" className="ghostBtn" onClick={loadUploadsReport} disabled={reportLoading}>
+              {reportLoading ? (lang === "ar" ? "..." : "...") : (lang === "ar" ? "تقرير الرفعات" : "Uploads Report")}
+            </button>
           </div>
         </div>
 
@@ -965,20 +843,12 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           {scopeMode === "facility" ? (
             <div className="field">
               <label>{t.facility}</label>
-              <input
-                value={facilityId}
-                onChange={(e) => setFacilityId(e.target.value)}
-                placeholder={t.placeholderFacility}
-              />
+              <input value={facilityId} onChange={(e) => setFacilityId(e.target.value)} placeholder={t.placeholderFacility} />
             </div>
           ) : scopeMode === "region" ? (
             <div className="field">
               <label>{t.region}</label>
-              <input
-                value={regionId}
-                onChange={(e) => setRegionId(e.target.value)}
-                placeholder={t.placeholderRegion}
-              />
+              <input value={regionId} onChange={(e) => setRegionId(e.target.value)} placeholder={t.placeholderRegion} />
             </div>
           ) : (
             <div className="field">
@@ -989,12 +859,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
           <div className="field">
             <label>{t.test}</label>
-            <Dropdown
-              dir={isRTL ? "rtl" : "ltr"}
-              value={testCode}
-              onChange={(v) => setTestCode(v)}
-              options={getTestOptions(t)}
-            />
+            <Dropdown dir={isRTL ? "rtl" : "ltr"} value={testCode} onChange={(v) => setTestCode(v)} options={getTestOptions(t)} />
           </div>
         </div>
 
@@ -1065,12 +930,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               ]}
             />
             <div className="muted" style={{ marginTop: 8 }}>
-              {lang === "ar" ? "Preset الحالي" : "Current preset"}:{" "}
-              <span className="tinyPill">{presetLabel}</span> •{" "}
+              {lang === "ar" ? "Preset الحالي" : "Current preset"}: <span className="tinyPill">{presetLabel}</span> •{" "}
               {lang === "ar" ? "متقدمة" : "Advanced"}:{" "}
-              <span className="tinyPill">
-                {advanced ? (lang === "ar" ? "نعم" : "Yes") : (lang === "ar" ? "لا" : "No")}
-              </span>
+              <span className="tinyPill">{advanced ? (lang === "ar" ? "نعم" : "Yes") : (lang === "ar" ? "لا" : "No")}</span>
             </div>
           </div>
         </div>
@@ -1088,26 +950,18 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         >
           <div className="advHeader" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
             <div>
-              <div className="advTitle" style={{ fontWeight: 950 }}>{t.advanced}</div>
+              <div className="advTitle" style={{ fontWeight: 950 }}>
+                {t.advanced}
+              </div>
               <div className="muted">{t.advancedHint}</div>
             </div>
 
             <div className="actions">
-              <button
-                type="button"
-                className="ghostBtn"
-                onClick={() => setAdvanced((s) => !s)}
-                disabled={loading}
-              >
+              <button type="button" className="ghostBtn" onClick={() => setAdvanced((s) => !s)} disabled={loading}>
                 {advanced ? t.advancedOff : t.advancedOn}
               </button>
 
-              <button
-                type="button"
-                className="ghostBtn"
-                onClick={resetAdvancedToPreset}
-                disabled={loading}
-              >
+              <button type="button" className="ghostBtn" onClick={resetAdvancedToPreset} disabled={loading}>
                 {t.resetToPreset}
               </button>
             </div>
@@ -1123,15 +977,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 marginTop: 10,
               }}
             >
-              <div
-                className="advCard"
-                style={{
-                  borderRadius: 14,
-                  padding: 10,
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.10)",
-                }}
-              >
+              <div className="advCard" style={{ borderRadius: 14, padding: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)" }}>
                 <div className="advCardTitle" style={{ fontWeight: 950, marginBottom: 8 }}>
                   {t.ewmaBlock}
                 </div>
@@ -1141,9 +987,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   min={BOUNDS.ewma.lambda.min}
                   max={BOUNDS.ewma.lambda.max}
                   step={0.01}
-                  onChange={(v) =>
-                    setEwmaLambda(clampNum(v, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max))
-                  }
+                  onChange={(v) => setEwmaLambda(clampNum(v, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max))}
                   hint={t.hintLambda}
                 />
                 <ParamSlider
@@ -1152,9 +996,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   min={BOUNDS.ewma.L.min}
                   max={BOUNDS.ewma.L.max}
                   step={0.1}
-                  onChange={(v) =>
-                    setEwmaL(clampNum(v, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max))
-                  }
+                  onChange={(v) => setEwmaL(clampNum(v, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max))}
                   hint={t.hintL}
                 />
                 <ParamSlider
@@ -1163,22 +1005,12 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   min={BOUNDS.ewma.baselineN.min}
                   max={BOUNDS.ewma.baselineN.max}
                   step={1}
-                  onChange={(v) =>
-                    setEwmaBaselineN(clampInt(v, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max))
-                  }
+                  onChange={(v) => setEwmaBaselineN(clampInt(v, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max))}
                   hint={t.hintBaselineN}
                 />
               </div>
 
-              <div
-                className="advCard"
-                style={{
-                  borderRadius: 14,
-                  padding: 10,
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.10)",
-                }}
-              >
+              <div className="advCard" style={{ borderRadius: 14, padding: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)" }}>
                 <div className="advCardTitle" style={{ fontWeight: 950, marginBottom: 8 }}>
                   {t.cusumBlock}
                 </div>
@@ -1188,9 +1020,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   min={BOUNDS.cusum.baselineN.min}
                   max={BOUNDS.cusum.baselineN.max}
                   step={1}
-                  onChange={(v) =>
-                    setCusumBaselineN(clampInt(v, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max))
-                  }
+                  onChange={(v) => setCusumBaselineN(clampInt(v, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max))}
                   hint={t.hintBaselineN}
                 />
                 <ParamSlider
@@ -1199,9 +1029,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   min={BOUNDS.cusum.k.min}
                   max={BOUNDS.cusum.k.max}
                   step={0.01}
-                  onChange={(v) =>
-                    setCusumK(clampNum(v, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max))
-                  }
+                  onChange={(v) => setCusumK(clampNum(v, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max))}
                   hint={t.hintK}
                 />
                 <ParamSlider
@@ -1210,22 +1038,12 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   min={BOUNDS.cusum.h.min}
                   max={BOUNDS.cusum.h.max}
                   step={0.1}
-                  onChange={(v) =>
-                    setCusumH(clampNum(v, BOUNDS.cusum.h.min, BOUNDS.cusum.h.max))
-                  }
+                  onChange={(v) => setCusumH(clampNum(v, BOUNDS.cusum.h.min, BOUNDS.cusum.h.max))}
                   hint={t.hintH}
                 />
               </div>
 
-              <div
-                className="advCard"
-                style={{
-                  borderRadius: 14,
-                  padding: 10,
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.10)",
-                }}
-              >
+              <div className="advCard" style={{ borderRadius: 14, padding: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)" }}>
                 <div className="advCardTitle" style={{ fontWeight: 950, marginBottom: 8 }}>
                   {t.farringtonBlock}
                 </div>
@@ -1235,15 +1053,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   min={BOUNDS.farrington.baselineWeeks.min}
                   max={BOUNDS.farrington.baselineWeeks.max}
                   step={1}
-                  onChange={(v) =>
-                    setFarringtonBaselineWeeks(
-                      clampInt(
-                        v,
-                        BOUNDS.farrington.baselineWeeks.min,
-                        BOUNDS.farrington.baselineWeeks.max
-                      )
-                    )
-                  }
+                  onChange={(v) => setFarringtonBaselineWeeks(clampInt(v, BOUNDS.farrington.baselineWeeks.min, BOUNDS.farrington.baselineWeeks.max))}
                   hint={t.hintFarrBaseline}
                 />
                 <ParamSlider
@@ -1252,9 +1062,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   min={BOUNDS.farrington.z.min}
                   max={BOUNDS.farrington.z.max}
                   step={0.05}
-                  onChange={(v) =>
-                    setFarringtonZ(clampNum(v, BOUNDS.farrington.z.min, BOUNDS.farrington.z.max))
-                  }
+                  onChange={(v) => setFarringtonZ(clampNum(v, BOUNDS.farrington.z.min, BOUNDS.farrington.z.max))}
                   hint={t.hintZ}
                 />
               </div>
@@ -1267,25 +1075,13 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           <div className="field" style={{ flex: 1 }}>
             <label>{t.methods}</label>
             <div className="chips" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                className={`chipBtn ${methods.ewma ? "chipBtnOn" : ""}`}
-                onClick={() => toggleMethod("ewma")}
-              >
+              <button type="button" className={`chipBtn ${methods.ewma ? "chipBtnOn" : ""}`} onClick={() => toggleMethod("ewma")}>
                 EWMA
               </button>
-              <button
-                type="button"
-                className={`chipBtn ${methods.cusum ? "chipBtnOn" : ""}`}
-                onClick={() => toggleMethod("cusum")}
-              >
+              <button type="button" className={`chipBtn ${methods.cusum ? "chipBtnOn" : ""}`} onClick={() => toggleMethod("cusum")}>
                 CUSUM
               </button>
-              <button
-                type="button"
-                className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""}`}
-                onClick={() => toggleMethod("farrington")}
-              >
+              <button type="button" className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""}`} onClick={() => toggleMethod("farrington")}>
                 Farrington
               </button>
             </div>
@@ -1306,6 +1102,10 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
             <button type="button" className="primaryBtn" onClick={runAnalysis} disabled={!canRunNow}>
               {loading ? "…" : t.run}
+            </button>
+
+            <button type="button" className="ghostBtn" onClick={resetRun} disabled={loading && !runData}>
+              {lang === "ar" ? "Reset" : "Reset"}
             </button>
 
             <button type="button" className="ghostBtn" onClick={copyReport} disabled={!reportText || loading}>
@@ -1352,205 +1152,293 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         </div>
       </section>
 
-      {/* ✅ RESULTS START WITH STATUS CARD ONLY */}
-      <section className="grid">
-        <div className="card cardWide" style={{ padding: 0, background: "transparent", border: "0" }}>
-          <div className="statusCard">
-            <div
-              className="statusGlow"
-              style={{
-                background:
-                  decisionKey === "alert"
-                    ? "radial-gradient(circle at 30% 30%, rgba(239,68,68,0.35), transparent 55%)"
-                    : decisionKey === "watch"
-                    ? "radial-gradient(circle at 30% 30%, rgba(245,158,11,0.32), transparent 55%)"
-                    : "radial-gradient(circle at 30% 30%, rgba(16,185,129,0.30), transparent 55%)",
-              }}
-            />
+      {/* ✅ النتائج مخفية بالكامل قبل Run */}
+      {runData ? (
+        <section className="grid">
+          <div className="card cardWide" style={{ padding: 0, background: "transparent", border: "0" }}>
+            <div className="statusCard">
+              <div
+                className="statusGlow"
+                style={{
+                  background:
+                    decisionKey === "alert"
+                      ? "radial-gradient(circle at 30% 30%, rgba(239,68,68,0.35), transparent 55%)"
+                      : decisionKey === "watch"
+                      ? "radial-gradient(circle at 30% 30%, rgba(245,158,11,0.32), transparent 55%)"
+                      : "radial-gradient(circle at 30% 30%, rgba(16,185,129,0.30), transparent 55%)",
+                }}
+              />
 
-            <div className="statusTop">
-              <div>
-                <div className="statusTitle">{t.statusCardTitle}</div>
-                <div className="muted" style={{ marginTop: 6 }}>
-                  {t.testLabel}: <b>{testCode}</b> • {t.signalLabel}: <b>{derivedSignal}</b> •{" "}
-                  {t.scopeLabel}: <b>{scopeLabel()}</b>
-                </div>
-              </div>
-
-              <div className="statusBadge" style={{ borderColor: theme.color }}>
-                <span
-                  style={{
-                    width: 10,
-                    height: 10,
-                    borderRadius: 999,
-                    background: theme.color,
-                    boxShadow: `0 0 0 6px rgba(255,255,255,0.06)`,
-                    display: "inline-block",
-                  }}
-                />
-                <span style={{ fontWeight: 950 }}>
-                  {t.status}: {statusLabel}
-                </span>
-              </div>
-            </div>
-
-            <div className="statusMain">
-              <div>
-                <div className="statusBig" style={{ color: theme.color }}>
-                  {statusLabel}
-                </div>
-                <div className="muted" style={{ marginTop: 6 }}>
-                  {t.analysisNoteBody}
-                </div>
-              </div>
-
-              <div className="statusMeta">
-                <div className="kv">
-                  <div className="k">{t.trend}</div>
-                  <div className="v">{trendLabel}</div>
-                </div>
-                <div className="kv">
-                  <div className="k">{t.confidence}</div>
-                  <div className="v">{confLabel}</div>
-                </div>
-                <div className="kv">
-                  <div className="k">{t.methodsUsed}</div>
-                  <div className="v">{trustMethods}</div>
-                </div>
-              </div>
-            </div>
-
-            <div className="statusText">
-              <div style={{ display: "grid", gap: 8 }}>
+              <div className="statusTop">
                 <div>
-                  <b>{t.why}</b> — {whyText}
+                  <div className="statusTitle">{t.statusCardTitle}</div>
+                  <div className="muted" style={{ marginTop: 6 }}>
+                    {t.testLabel}: <b>{testCode}</b> • {t.signalLabel}: <b>{derivedSignal}</b> • {t.scopeLabel}: <b>{scopeLabel()}</b>
+                  </div>
                 </div>
-                <div>
-                  <b>{t.actions}</b> — {actionsText}
+
+                <div className="statusBadge" style={{ borderColor: theme.color }}>
+                  <span
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: 999,
+                      background: theme.color,
+                      boxShadow: `0 0 0 6px rgba(255,255,255,0.06)`,
+                      display: "inline-block",
+                    }}
+                  />
+                  <span style={{ fontWeight: 950 }}>
+                    {t.status}: {statusLabel}
+                  </span>
                 </div>
               </div>
 
-              <div className="actions" style={{ justifyContent: "flex-start", marginTop: 12 }}>
-                <button type="button" className="linkBtn" onClick={() => setShowDetails((s) => !s)}>
-                  {showDetails ? t.hideDetails : t.viewDetails}
-                </button>
+              <div className="statusMain">
+                <div>
+                  <div className="statusBig" style={{ color: theme.color }}>
+                    {statusLabel}
+                  </div>
+                  <div className="muted" style={{ marginTop: 6 }}>
+                    {t.analysisNoteBody}
+                  </div>
+                </div>
+
+                <div className="statusMeta">
+                  <div className="kv">
+                    <div className="k">{t.trend}</div>
+                    <div className="v">{trendLabel}</div>
+                  </div>
+                  <div className="kv">
+                    <div className="k">{t.confidence}</div>
+                    <div className="v">{confLabel}</div>
+                  </div>
+                  <div className="kv">
+                    <div className="k">{t.methodsUsed}</div>
+                    <div className="v">{trustMethods}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="statusText">
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div>
+                    <b>{t.why}</b> — {whyText}
+                  </div>
+                  <div>
+                    <b>{t.actions}</b> — {actionsText}
+                  </div>
+                </div>
+
+                <div className="actions" style={{ justifyContent: "flex-start", marginTop: 12 }}>
+                  <button type="button" className="linkBtn" onClick={() => setShowDetails((s) => !s)}>
+                    {showDetails ? t.hideDetails : t.viewDetails}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Technical details are hidden by default */}
-        {showDetails ? (
-          <>
-            <DecisionCard
-              title={lang === "ar" ? "قرار الإجماع (تفصيلي)" : "Consensus (details)"}
-              value={upper(decision)}
-              hint={t.empty}
-            />
+          {/* Technical details are hidden by default */}
+          {showDetails ? (
+            <>
+              <DecisionCard title={lang === "ar" ? "قرار الإجماع (تفصيلي)" : "Consensus (details)"} value={upper(decision)} hint={t.empty} />
 
-            <div className="card cardWide">
-              <div className="cardHeader">
-                <div className="cardTitle">{t.chartsTitle}</div>
-              </div>
-              <div className="muted" style={{ marginBottom: 10 }}>
-                {t.chartsHint}
-              </div>
-
-              <div style={{ display: "grid", gap: 12 }}>
-                {methods.ewma ? <SimpleSeriesChart {...ewCfg} /> : null}
-                {methods.cusum ? <SimpleSeriesChart {...cuCfg} /> : null}
-                {methods.farrington ? <SimpleSeriesChart {...faCfg} /> : null}
-              </div>
-            </div>
-
-            {/* Population Stratification */}
-            <div className="card cardWide">
-              <div className="cardHeader">
-                <div className="cardTitle">{t.strat}</div>
-              </div>
-
-              {!profile ? (
-                <div className="muted">{t.empty}</div>
-              ) : (
-                <div style={{ display: "grid", gap: 12 }}>
-                  <div className="mini">
-                    <div className="miniRow">
-                      <div className="miniKey">{t.totalSamples}</div>
-                      <div className="miniVal">{overallN}</div>
-                    </div>
-                    <div className="miniRow">
-                      <div className="miniKey">{t.cases}</div>
-                      <div className="miniVal">{overallCases ?? "—"}</div>
-                    </div>
-                    <div className="miniRow">
-                      <div className="miniKey">{t.signalRate}</div>
-                      <div className="miniVal">{fmtPct(overallRate)}</div>
-                    </div>
-                  </div>
-
-                  <div className="stratGrid">
-                    <StratCard
-                      title={t.bySex}
-                      items={profile?.bySex || []}
-                      getKey={(it) => keyLabelSex(it?.sex)}
-                      t={t}
-                    />
-                    <StratCard
-                      title={t.byAge}
-                      items={profile?.byAge || []}
-                      getKey={(it) => safeLabel(it?.ageBand)}
-                      t={t}
-                    />
-                    <StratCard
-                      title={t.byNationality}
-                      items={profile?.byNationality || []}
-                      getKey={(it) => safeLabel(it?.nationality)}
-                      t={t}
-                    />
-                  </div>
-
-                  {insightText ? (
-                    <div
-                      className="reportBox2"
-                      style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }}
-                      dir={isRTL ? "rtl" : "ltr"}
-                    >
-                      {insightText}
-                    </div>
-                  ) : null}
+              <div className="card cardWide">
+                <div className="cardHeader">
+                  <div className="cardTitle">{t.chartsTitle}</div>
                 </div>
-              )}
+                <div className="muted" style={{ marginBottom: 10 }}>
+                  {t.chartsHint}
+                </div>
+
+                <div style={{ display: "grid", gap: 12 }}>
+                  {methods.ewma ? <SimpleSeriesChart {...ewCfg} /> : null}
+                  {methods.cusum ? <SimpleSeriesChart {...cuCfg} /> : null}
+                  {methods.farrington ? <SimpleSeriesChart {...faCfg} /> : null}
+                </div>
+              </div>
+
+              {/* Population Stratification */}
+              <div className="card cardWide">
+                <div className="cardHeader">
+                  <div className="cardTitle">{t.strat}</div>
+                </div>
+
+                {!profile ? (
+                  <div className="muted">{t.empty}</div>
+                ) : (
+                  <div style={{ display: "grid", gap: 12 }}>
+                    <div className="mini">
+                      <div className="miniRow">
+                        <div className="miniKey">{t.totalSamples}</div>
+                        <div className="miniVal">{overallN}</div>
+                      </div>
+                      <div className="miniRow">
+                        <div className="miniKey">{t.cases}</div>
+                        <div className="miniVal">{overallCases ?? "—"}</div>
+                      </div>
+                      <div className="miniRow">
+                        <div className="miniKey">{t.signalRate}</div>
+                        <div className="miniVal">{fmtPct(overallRate)}</div>
+                      </div>
+                    </div>
+
+                    <div className="stratGrid">
+                      <StratCard title={t.bySex} items={profile?.bySex || []} getKey={(it) => keyLabelSex(it?.sex)} t={t} />
+                      <StratCard title={t.byAge} items={profile?.byAge || []} getKey={(it) => safeLabel(it?.ageBand)} t={t} />
+                      <StratCard title={t.byNationality} items={profile?.byNationality || []} getKey={(it) => safeLabel(it?.nationality)} t={t} />
+                    </div>
+
+                    {insightText ? (
+                      <div className="reportBox2" style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }} dir={isRTL ? "rtl" : "ltr"}>
+                        {insightText}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+
+              {/* Narrative report */}
+              <div className="card cardWide">
+                <div className="cardHeader">
+                  <div className="cardTitle">{t.narrative}</div>
+                </div>
+
+                <div className="reportBox2" dir={isRTL ? "rtl" : "ltr"} style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: 12, borderRadius: 12, minHeight: 180 }}>
+                  {reportText || t.empty}
+                </div>
+
+                {!reportText ? <div className="muted" style={{ marginTop: 8 }}>{t.insufficient}</div> : null}
+              </div>
+            </>
+          ) : null}
+        </section>
+      ) : null}
+
+      {/* ✅ Uploads Report Modal */}
+      {reportOpen ? (
+        <div className="modalOverlay" onMouseDown={() => setReportOpen(false)}>
+          <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modalHeader">
+              <div>
+                <div className="modalTitle">{lang === "ar" ? "تقرير الرفعات" : "Uploads Report"}</div>
+                <div className="muted" style={{ marginTop: 6 }}>
+                  {lang === "ar"
+                    ? "ملخص الملفات والمرافق والمناطق وعدد الفحوصات حسب كل فحص."
+                    : "Summary of uploads, facilities, regions, and counts per test."}
+                </div>
+              </div>
+              <button className="ghostBtn" onClick={() => setReportOpen(false)}>
+                {lang === "ar" ? "إغلاق" : "Close"}
+              </button>
             </div>
 
-            {/* Narrative report */}
-            <div className="card cardWide">
-              <div className="cardHeader">
-                <div className="cardTitle">{t.narrative}</div>
-              </div>
+            <div className="modalBody">
+              {reportErr ? <div className="muted">{reportErr}</div> : null}
 
-              <div
-                className="reportBox2"
-                dir={isRTL ? "rtl" : "ltr"}
-                style={{
-                  whiteSpace: "pre-wrap",
-                  lineHeight: 1.8,
-                  padding: 12,
-                  borderRadius: 12,
-                  minHeight: 180,
-                }}
-              >
-                {reportText || t.empty}
-              </div>
+              {!reportErr && !reportData ? (
+                <div className="muted">{lang === "ar" ? "لا توجد بيانات." : "No data."}</div>
+              ) : null}
 
-              {!reportText ? (
-                <div className="muted" style={{ marginTop: 8 }}>
-                  {t.insufficient}
+              {reportData?.totals ? (
+                <div className="mini" style={{ marginBottom: 12 }}>
+                  <div className="miniRow">
+                    <div className="miniKey">{lang === "ar" ? "عدد الملفات" : "Files"}</div>
+                    <div className="miniVal">{reportData.totals.files}</div>
+                  </div>
+                  <div className="miniRow">
+                    <div className="miniKey">{lang === "ar" ? "إجمالي الفحوصات" : "Total tests"}</div>
+                    <div className="miniVal">{reportData.totals.tests}</div>
+                  </div>
+                  <div className="miniRow">
+                    <div className="miniKey">{lang === "ar" ? "عدد المرافق" : "Facilities"}</div>
+                    <div className="miniVal">{reportData.totals.facilities}</div>
+                  </div>
+                  <div className="miniRow">
+                    <div className="miniKey">{lang === "ar" ? "عدد المناطق" : "Regions"}</div>
+                    <div className="miniVal">{reportData.totals.regions}</div>
+                  </div>
                 </div>
               ) : null}
+
+              {Array.isArray(reportData?.byTest) && reportData.byTest.length ? (
+                <>
+                  <div className="cardTitle" style={{ marginBottom: 8 }}>{lang === "ar" ? "حسب الفحص" : "By test"}</div>
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>{lang === "ar" ? "الفحص" : "Test"}</th>
+                        <th>{lang === "ar" ? "العدد" : "Count"}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportData.byTest.slice(0, 200).map((r, idx) => (
+                        <tr key={idx}>
+                          <td>{r.testCode}</td>
+                          <td>{r.n}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              ) : null}
+
+              <div style={{ height: 12 }} />
+
+              {Array.isArray(reportData?.facilities) && reportData.facilities.length ? (
+                <>
+                  <div className="cardTitle" style={{ marginBottom: 8 }}>{lang === "ar" ? "المرافق" : "Facilities"}</div>
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>{lang === "ar" ? "رمز المرفق" : "Facility ID"}</th>
+                        <th>{lang === "ar" ? "اسم المرفق" : "Facility name"}</th>
+                        <th>{lang === "ar" ? "عدد الفحوصات" : "Tests"}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportData.facilities.slice(0, 200).map((r, idx) => (
+                        <tr key={idx}>
+                          <td>{r.facilityId}</td>
+                          <td>{r.facilityName || "—"}</td>
+                          <td>{r.n}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              ) : null}
+
+              <div style={{ height: 12 }} />
+
+              {Array.isArray(reportData?.regions) && reportData.regions.length ? (
+                <>
+                  <div className="cardTitle" style={{ marginBottom: 8 }}>{lang === "ar" ? "المناطق" : "Regions"}</div>
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>{lang === "ar" ? "رمز المنطقة" : "Region ID"}</th>
+                        <th>{lang === "ar" ? "اسم المنطقة" : "Region name"}</th>
+                        <th>{lang === "ar" ? "عدد الفحوصات" : "Tests"}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportData.regions.slice(0, 200).map((r, idx) => (
+                        <tr key={idx}>
+                          <td>{r.regionId}</td>
+                          <td>{r.regionName || "—"}</td>
+                          <td>{r.n}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              ) : null}
             </div>
-          </>
-        ) : null}
-      </section>
+          </div>
+        </div>
+      ) : null}
 
       <footer className="footer">
         <div>{t.footerLine1}</div>
