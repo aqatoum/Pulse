@@ -1,5 +1,5 @@
 const { getSignal } = require("./signalRegistry");
-const CLINICAL = require("../../config/clinical.thresholds"); // ✅ NEW: age-based thresholds for non-Hb tests
+const CLINICAL = require("../../config/clinical.thresholds"); // age-based thresholds for non-Hb tests
 
 // ===== Helpers =====
 
@@ -48,17 +48,15 @@ function normalizeLang(lang) {
   return "both";
 }
 
-// ===== Value extractors (generalized) =====
-
 function normalizeTestCode(code) {
   return String(code || "").trim().toUpperCase();
 }
 
 /**
  * Universal numeric extractor for ANY test.
- * - If testCodeFilter is provided, we enforce it.
+ * - If testCodeFilter is provided, enforce it.
  * - Accepts r.value (number or numeric string).
- * - Falls back to anemia legacy r.hb for backward compatibility.
+ * - Falls back to legacy anemia r.hb.
  */
 function toNumericValue(r, testCodeFilter = null) {
   if (!r) return null;
@@ -80,11 +78,10 @@ function toNumericValue(r, testCodeFilter = null) {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-// ✅ percent formatting helper (controls decimals)
+// ✅ percent helper (used in insight text)
 function pct(rate01, decimals = 1) {
   if (typeof rate01 !== "number" || !Number.isFinite(rate01)) return null;
-  const p = rate01 * 100;
-  return Number(p.toFixed(decimals));
+  return Number((rate01 * 100).toFixed(decimals));
 }
 
 // ===== Age-band -> clinical thresholds =====
@@ -97,8 +94,8 @@ function pickBand(bands, ageYears) {
 
 /**
  * Build case definition (low/high) using:
- * - Hb anemia rule (sex/age) for signalType anemia
- * - CLINICAL config for other tests (age-based bands)
+ * - Hb anemia rule for anemia/HB
+ * - CLINICAL config for other tests (age bands)
  */
 function buildCaseDef({ signalType, testCode }) {
   const st = String(signalType || "").toLowerCase();
@@ -145,7 +142,7 @@ function buildInsight({
   overall,
   byAgeSex,
   language = "en",
-  direction = "low", // "low" | "high"
+  direction = "low",
   caseLabelEn = "cases",
   caseLabelAr = "حالات",
 }) {
@@ -229,21 +226,37 @@ function buildInsight({
   };
 }
 
-function summarizeGroups(map, groupKeys, extraSort = null) {
+/**
+ * ✅ summarizeGroups now also outputs:
+ *  - caseCount, caseRate (based on direction)
+ * This is the KEY fix to make UI consistent across all tests.
+ */
+function summarizeGroups(map, groupKeys, direction, extraSort = null) {
   const arr = [];
+
   for (const [key, v] of map.entries()) {
     const lowRate = v.n > 0 ? v.low / v.n : null;
     const highRate = v.n > 0 ? v.high / v.n : null;
 
-    const obj = {
+    const caseCount = direction === "high" ? v.high : v.low;
+    const caseRate = v.n > 0 ? caseCount / v.n : null;
+
+    arr.push({
       ...groupKeys(key),
+
       n: v.n,
+
+      // keep for debugging/back-compat
       low: v.low,
       lowRate: round4(lowRate),
       high: v.high,
       highRate: round4(highRate),
-    };
-    arr.push(obj);
+
+      // ✅ stable, UI-friendly fields
+      caseCount,
+      caseRate: round4(caseRate),
+      direction,
+    });
   }
 
   const ageOrder = { "0-4": 1, "5-14": 2, "15-49": 3, "50+": 4, unknown: 99 };
@@ -270,27 +283,21 @@ function summarizeGroups(map, groupKeys, extraSort = null) {
   return arr;
 }
 
-// ===== Main (generalized wrapper) =====
+// ===== Main =====
 function computeSignalProfile({ rows, signalType = "anemia", testCode = null, lang = "both" }) {
   const language = normalizeLang(lang);
 
-  // Pull metadata from registry if available
   const sig = getSignal(signalType) || {};
 
-  // Determine direction:
-  // - If anemia: low
-  // - Else: from CLINICAL config for the selected testCode (fallback to registry direction)
   const codeForCfg = normalizeTestCode(testCode || sig?.testCode || "");
   const cfgDir =
     CLINICAL?.[codeForCfg]?.direction ? String(CLINICAL[codeForCfg].direction).toLowerCase() : null;
   const regDir = String(sig?.direction || "low").toLowerCase();
   const direction = (cfgDir || regDir) === "high" ? "high" : "low";
 
-  // Labels used in narrative
   const caseLabelEn = sig?.caseLabel?.en || (direction === "high" ? "high cases" : "low cases");
   const caseLabelAr = sig?.caseLabel?.ar || (direction === "high" ? "حالات مرتفعة" : "حالات منخفضة");
 
-  // Case definition
   const caseDef = buildCaseDef({ signalType, testCode: codeForCfg });
 
   let totalN = 0;
@@ -308,7 +315,6 @@ function computeSignalProfile({ rows, signalType = "anemia", testCode = null, la
   }
 
   for (const r of rows || []) {
-    // If caller passes testCode, enforce it here
     const v = toNumericValue(r, testCode ? testCode : null);
     if (v === null) continue;
 
@@ -318,11 +324,6 @@ function computeSignalProfile({ rows, signalType = "anemia", testCode = null, la
     const s = sexNorm(r.sex);
     const nat = nationalityNorm(r.nationality || r.nationalityCode || r.nat);
 
-    // Determine low/high classification
-    // - For anemia and most CLINICAL rules: we define the "case" by direction
-    // - For completeness, we still compute low/high counts:
-    //    * if direction is LOW: case => low
-    //    * if direction is HIGH: case => high
     let isLow = false;
     let isHigh = false;
 
@@ -330,67 +331,70 @@ function computeSignalProfile({ rows, signalType = "anemia", testCode = null, la
       const isCase = !!caseDef.isCase(v, r);
       if (caseDef.direction === "low") isLow = isCase;
       else isHigh = isCase;
-    } else {
-      // If no caseDef exists for this test yet, we cannot classify; count only N.
-      // Keep low/high as false.
-      isLow = false;
-      isHigh = false;
     }
 
     if (isLow) totalLow++;
     if (isHigh) totalHigh++;
 
-    // byAge
     const ba = ensure(byAge, a);
     ba.n++;
     if (isLow) ba.low++;
     if (isHigh) ba.high++;
 
-    // bySex
     const bs = ensure(bySex, s);
     bs.n++;
     if (isLow) bs.low++;
     if (isHigh) bs.high++;
 
-    // byAgeSex
     const k = `${a}|${s}`;
     const bas = ensure(byAgeSex, k);
     bas.n++;
     if (isLow) bas.low++;
     if (isHigh) bas.high++;
 
-    // byNationality
     const bn = ensure(byNationality, nat);
     bn.n++;
     if (isLow) bn.low++;
     if (isHigh) bn.high++;
   }
 
+  const overallCaseCount = direction === "high" ? totalHigh : totalLow;
+  const overallCaseRate = totalN > 0 ? overallCaseCount / totalN : null;
+
   const overall = {
     n: totalN,
 
+    // keep for debugging/back-compat
     low: totalLow,
     lowRate: round4(totalN > 0 ? totalLow / totalN : null),
-
     high: totalHigh,
     highRate: round4(totalN > 0 ? totalHigh / totalN : null),
 
+    // ✅ stable fields
     direction,
-    caseCount: direction === "high" ? totalHigh : totalLow,
-    caseRate: round4(totalN > 0 ? (direction === "high" ? totalHigh / totalN : totalLow / totalN) : null),
+    testCode: codeForCfg,
+    caseLabelEn,
+    caseLabelAr,
+    caseCount: overallCaseCount,
+    caseRate: round4(overallCaseRate),
   };
 
   const profile = {
     overall,
-    byAge: summarizeGroups(byAge, (key) => ({ ageBand: key })),
-    bySex: summarizeGroups(bySex, (key) => ({ sex: key })),
-    byAgeSex: summarizeGroups(byAgeSex, (key) => {
-      const [ageBandKey, sexKey] = String(key).split("|");
-      return { ageBand: ageBandKey, sex: sexKey };
-    }),
+    byAge: summarizeGroups(byAge, (key) => ({ ageBand: key }), direction),
+    bySex: summarizeGroups(bySex, (key) => ({ sex: key }), direction),
+    byAgeSex: summarizeGroups(
+      byAgeSex,
+      (key) => {
+        const [ageBandKey, sexKey] = String(key).split("|");
+        return { ageBand: ageBandKey, sex: sexKey };
+      },
+      direction
+    ),
     byNationality: summarizeGroups(
       byNationality,
       (key) => ({ nationality: key }),
+      direction,
       (a, b) => String(a.nationality || "").localeCompare(String(b.nationality || ""))
     ),
   };
@@ -398,15 +402,15 @@ function computeSignalProfile({ rows, signalType = "anemia", testCode = null, la
   const insight =
     language === "both"
       ? {
-          ar: buildInsight({ signalType, ...profile, language: "ar", direction, caseLabelAr, caseLabelEn }),
-          en: buildInsight({ signalType, ...profile, language: "en", direction, caseLabelAr, caseLabelEn }),
+          ar: buildInsight({ signalType, overall, byAgeSex: profile.byAgeSex, language: "ar", direction, caseLabelAr, caseLabelEn }),
+          en: buildInsight({ signalType, overall, byAgeSex: profile.byAgeSex, language: "en", direction, caseLabelAr, caseLabelEn }),
         }
-      : buildInsight({ signalType, ...profile, language, direction, caseLabelAr, caseLabelEn });
+      : buildInsight({ signalType, overall, byAgeSex: profile.byAgeSex, language, direction, caseLabelAr, caseLabelEn });
 
   return { profile, insight };
 }
 
-// ===== Backward-compatible export =====
+// Backward-compatible export
 function computeAnemiaProfile({ rows, lang = "both" }) {
   return computeSignalProfile({ rows, signalType: "anemia", testCode: "HB", lang });
 }
