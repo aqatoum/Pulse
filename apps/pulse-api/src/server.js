@@ -9,6 +9,7 @@ const analyticsRoutes = require("./routes/analytics.routes");
 
 const Upload = require("./models/Upload");
 
+// Loads .env locally (Cloud Run uses real env vars; this won't hurt)
 dotenv.config();
 
 const app = express();
@@ -17,6 +18,7 @@ const app = express();
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = "0.0.0.0";
 
+// ✅ MUST be provided in Cloud Run Variables & Secrets
 const MONGODB_URI = process.env.MONGODB_URI;
 
 /* =========================
@@ -44,7 +46,9 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "Accept"],
+
+
   })
 );
 
@@ -85,7 +89,11 @@ app.get("/api/health", (req, res) => res.json(healthPayload()));
 
 app.get("/", (req, res) => {
   res.json({
-    ...healthPayload(),
+    ...healthPayload({
+      env: {
+        hasMongoUri: Boolean(process.env.MONGODB_URI),
+      },
+    }),
     message: "Welcome to PULSE API. Use /api/health for status.",
   });
 });
@@ -240,43 +248,6 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/upload", uploadRoutes);
 
 /* =========================
-   ✅ DEBUG: print routes snapshot once at startup
-   ========================= */
-function listRoutes(appInstance) {
-  try {
-    const out = [];
-    const stack = appInstance?._router?.stack || [];
-
-    for (const layer of stack) {
-      if (layer?.route?.path) {
-        const methods = Object.keys(layer.route.methods || {})
-          .map((m) => m.toUpperCase())
-          .join(",");
-        out.push(`${methods} ${layer.route.path}`);
-        continue;
-      }
-
-      if (layer?.name === "router" && layer?.handle?.stack) {
-        for (const h of layer.handle.stack) {
-          if (h?.route?.path) {
-            const methods = Object.keys(h.route.methods || {})
-              .map((m) => m.toUpperCase())
-              .join(",");
-            out.push(`${methods} (mounted) ${h.route.path}`);
-          }
-        }
-      }
-    }
-
-    console.log("=== ROUTES SNAPSHOT (first 200) ===");
-    out.slice(0, 200).forEach((r) => console.log(r));
-    console.log("===================================");
-  } catch (e) {
-    console.log("Routes snapshot failed:", e?.message || e);
-  }
-}
-
-/* =========================
    ✅ 404 (JSON)
    ========================= */
 app.use((req, res) => {
@@ -306,8 +277,21 @@ app.use((err, req, res, next) => {
    ========================= */
 app.listen(PORT, HOST, () => {
   console.log(`🚀 PULSE API listening on ${HOST}:${PORT}`);
-  listRoutes(app);
+  console.log(
+    `🔎 ENV CHECK: MONGODB_URI present? ${Boolean(process.env.MONGODB_URI)}`
+  );
 });
+
+/* =========================
+   ✅ MongoDB connection events (debug)
+   ========================= */
+mongoose.connection.on("connected", () => console.log("✅ MongoDB connected"));
+mongoose.connection.on("disconnected", () =>
+  console.log("⚠️ MongoDB disconnected")
+);
+mongoose.connection.on("error", (e) =>
+  console.error("❌ MongoDB error:", e?.message || e)
+);
 
 /* =========================
    ✅ Connect MongoDB (non-blocking)
@@ -316,13 +300,12 @@ app.listen(PORT, HOST, () => {
   try {
     if (!MONGODB_URI) {
       console.error("❌ MONGODB_URI is missing in env");
-      return; // لا تقتل السيرفر
+      return; // do not kill the server
     }
 
     await mongoose.connect(MONGODB_URI);
-    console.log("✅ MongoDB connected");
   } catch (err) {
-    console.error("❌ MongoDB connection failed:", err.message);
-    // ❗ لا process.exit
+    console.error("❌ MongoDB connection failed:", err?.message || err);
+    // ❗ no process.exit
   }
 })();
