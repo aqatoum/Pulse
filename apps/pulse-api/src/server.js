@@ -14,7 +14,10 @@ dotenv.config();
 
 const app = express();
 
-const PORT = Number(process.env.PORT || 4000);
+// ✅ Cloud Run sets PORT env var (usually 8080)
+const PORT = Number(process.env.PORT) || 8080;
+const HOST = "0.0.0.0";
+
 const MONGODB_URI = process.env.MONGODB_URI;
 
 /* =========================
@@ -150,7 +153,6 @@ app.get("/api/report/uploads", async (req, res, next) => {
           regionIds: Array.isArray(u.regionIds) ? u.regionIds : [],
           dateRange: u.dateRange || { start: null, end: null },
 
-          // Map في مونجو قد يرجع كـ object أو Map حسب سكيمتك
           testsByCode:
             u.testsByCode && typeof u.testsByCode === "object"
               ? u.testsByCode
@@ -174,19 +176,28 @@ app.get("/api/report/uploads", async (req, res, next) => {
  */
 app.get("/api/report/summary", async (req, res, next) => {
   try {
-    // 1) pull only fields we need (fast)
     const all = await Upload.find({})
-      .select({ facilityIds: 1, regionIds: 1, testsByCode: 1, totalTests: 1, rowsAccepted: 1 })
+      .select({
+        facilityIds: 1,
+        regionIds: 1,
+        testsByCode: 1,
+        totalTests: 1,
+        rowsAccepted: 1,
+      })
       .lean();
 
     const facilities = new Set();
     const regions = new Set();
-    const totalsByTest = {}; // summed across uploads
+    const totalsByTest = {};
     let grandTotalTests = 0;
 
     for (const u of all) {
-      (Array.isArray(u.facilityIds) ? u.facilityIds : []).forEach((x) => x && facilities.add(String(x)));
-      (Array.isArray(u.regionIds) ? u.regionIds : []).forEach((x) => x && regions.add(String(x)));
+      (Array.isArray(u.facilityIds) ? u.facilityIds : []).forEach(
+        (x) => x && facilities.add(String(x))
+      );
+      (Array.isArray(u.regionIds) ? u.regionIds : []).forEach(
+        (x) => x && regions.add(String(x))
+      );
 
       const tt = Number(u.totalTests ?? u.rowsAccepted ?? 0);
       if (Number.isFinite(tt)) grandTotalTests += tt;
@@ -210,7 +221,9 @@ app.get("/api/report/summary", async (req, res, next) => {
         facilityIds: Array.from(facilities).sort(),
         regionIds: Array.from(regions).sort(),
         testsByCode: Object.fromEntries(
-          Object.entries(totalsByTest).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+          Object.entries(totalsByTest).sort((a, b) =>
+            String(a[0]).localeCompare(String(b[0]))
+          )
         ),
       },
     });
@@ -294,18 +307,18 @@ app.use((err, req, res, next) => {
    ========================= */
 async function startServer() {
   try {
-    if (!MONGODB_URI) throw new Error("MONGODB_URI is missing in .env");
+    if (!MONGODB_URI) throw new Error("MONGODB_URI is missing in env");
 
     await mongoose.connect(MONGODB_URI);
-    console.log("MongoDB connected");
+    console.log("✅ MongoDB connected");
 
     listRoutes(app);
 
-    app.listen(PORT, () => {
-      console.log(`Server running on http://localhost:${PORT}`);
+    app.listen(PORT, HOST, () => {
+      console.log(`🚀 PULSE API listening on ${HOST}:${PORT}`);
     });
   } catch (error) {
-    console.error("Server failed to start:", error.message);
+    console.error("❌ Server failed to start:", error.message);
     process.exit(1);
   }
 }
