@@ -20,3 +20,9 @@ pnpm-debug.log*
 # OS/Editor
 .DS_Store
 .vscode/
+# Env files
+.env
+.env.*
+apps/pulse-portal/.env
+apps/pulse-portal/.env.*
+

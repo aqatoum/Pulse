@@ -1242,8 +1242,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           {/* Technical details are hidden by default */}
           {showDetails ? (
             <>
-              <DecisionCard title={lang === "ar" ? "قرار الإجماع (تفصيلي)" : "Consensus (details)"} value={upper(decision)} hint={t.empty} />
-
+              
               <div className="card cardWide">
                 <div className="cardHeader">
                   <div className="cardTitle">{t.chartsTitle}</div>

@@ -26,7 +26,16 @@ const TXT = {
 const LANG_STORAGE_KEY = "pulse_lang";
 
 export default function App() {
-  const API = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
+  // ✅ Production base URL (from .env.production build)
+  const API_BASE_URL =
+    (import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
+
+  // ✅ Fail-fast (better than silent localhost fallbacks)
+  if (!API_BASE_URL) {
+    console.error(
+      "❌ VITE_API_BASE_URL is missing. Add it to apps/pulse-portal/.env.production then rebuild & redeploy."
+    );
+  }
 
   // اللغة
   const [lang, setLang] = useState(() => {
@@ -93,7 +102,8 @@ export default function App() {
       {/* ===== Main ===== */}
       <main className="container">
         {page === "dashboard" ? (
-          <SurveillanceDashboard lang={lang} apiBase={API} />
+          // ✅ pass base URL string (correct)
+          <SurveillanceDashboard lang={lang} apiBase={API_BASE_URL} />
         ) : (
           <MethodologyPage lang={lang} />
         )}
