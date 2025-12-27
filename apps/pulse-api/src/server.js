@@ -7,14 +7,13 @@ const uploadRoutes = require("./routes/upload.routes");
 const ingestRoutes = require("./routes/ingest.routes");
 const analyticsRoutes = require("./routes/analytics.routes");
 
-// ✅ NEW: Upload model for reporting
 const Upload = require("./models/Upload");
 
 dotenv.config();
 
 const app = express();
 
-// ✅ Cloud Run sets PORT env var (usually 8080)
+// ✅ Cloud Run provides PORT (usually 8080)
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = "0.0.0.0";
 
@@ -39,7 +38,7 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: function (origin, cb) {
-      if (!origin) return cb(null, true);
+      if (!origin) return cb(null, true); // allow non-browser calls
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked for origin: ${origin}`));
     },
@@ -54,13 +53,17 @@ app.options("*", cors());
 /* =========================
    ✅ Health payload (single source)
    ========================= */
-function healthPayload() {
+function healthPayload(extra = {}) {
   return {
     ok: true,
     service: "PULSE API",
     status: "RUNNING",
     version: "1.0.0",
     timestamp: new Date().toISOString(),
+    mongo: {
+      connected: mongoose.connection?.readyState === 1, // 1 = connected
+      state: mongoose.connection?.readyState ?? null,
+    },
     endpoints: {
       health: "/api/health",
       legacyHealth: "/health",
@@ -70,6 +73,7 @@ function healthPayload() {
       reportUploads: "/api/report/uploads",
       reportSummary: "/api/report/summary",
     },
+    ...extra,
   };
 }
 
@@ -92,9 +96,7 @@ app.get("/", (req, res) => {
 
 /**
  * GET /api/report/uploads
- * Returns all uploaded files with facilityIds/regionIds/dateRange/testsByCode/rowsAccepted...
- * Query options:
- *   ?limit=50&skip=0
+ * Query options: ?limit=200&skip=0
  */
 app.get("/api/report/uploads", async (req, res, next) => {
   try {
@@ -170,9 +172,6 @@ app.get("/api/report/uploads", async (req, res, next) => {
 
 /**
  * GET /api/report/summary
- * Global summary across ALL uploads:
- * - unique facilities, unique regions
- * - total tests per testCode across uploads (sum)
  */
 app.get("/api/report/summary", async (req, res, next) => {
   try {
@@ -202,7 +201,8 @@ app.get("/api/report/summary", async (req, res, next) => {
       const tt = Number(u.totalTests ?? u.rowsAccepted ?? 0);
       if (Number.isFinite(tt)) grandTotalTests += tt;
 
-      const map = u.testsByCode && typeof u.testsByCode === "object" ? u.testsByCode : {};
+      const map =
+        u.testsByCode && typeof u.testsByCode === "object" ? u.testsByCode : {};
       for (const [k, v] of Object.entries(map)) {
         const code = String(k).toUpperCase();
         const n = Number(v || 0);
@@ -277,7 +277,7 @@ function listRoutes(appInstance) {
 }
 
 /* =========================
-   ✅ 404 (JSON, Codex-friendly)
+   ✅ 404 (JSON)
    ========================= */
 app.use((req, res) => {
   res.status(404).json({
@@ -285,7 +285,6 @@ app.use((req, res) => {
     error: "Not Found",
     path: req.originalUrl,
     method: req.method,
-    hint: "Check route mount points in server.js and the route path inside the router file.",
     known: healthPayload().endpoints,
   });
 });
@@ -303,24 +302,27 @@ app.use((err, req, res, next) => {
 });
 
 /* =========================
-   ✅ Bootstrap
+   ✅ START SERVER FIRST (Cloud Run)
    ========================= */
-async function startServer() {
+app.listen(PORT, HOST, () => {
+  console.log(`🚀 PULSE API listening on ${HOST}:${PORT}`);
+  listRoutes(app);
+});
+
+/* =========================
+   ✅ Connect MongoDB (non-blocking)
+   ========================= */
+(async () => {
   try {
-    if (!MONGODB_URI) throw new Error("MONGODB_URI is missing in env");
+    if (!MONGODB_URI) {
+      console.error("❌ MONGODB_URI is missing in env");
+      return; // لا تقتل السيرفر
+    }
 
     await mongoose.connect(MONGODB_URI);
     console.log("✅ MongoDB connected");
-
-    listRoutes(app);
-
-    app.listen(PORT, HOST, () => {
-      console.log(`🚀 PULSE API listening on ${HOST}:${PORT}`);
-    });
-  } catch (error) {
-    console.error("❌ Server failed to start:", error.message);
-    process.exit(1);
+  } catch (err) {
+    console.error("❌ MongoDB connection failed:", err.message);
+    // ❗ لا process.exit
   }
-}
-
-startServer();
+})();
