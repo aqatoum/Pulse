@@ -70,6 +70,48 @@ function decideCaseLabel(direction) {
   return { ar: "حالات غير اعتيادية", en: "unusual cases" };
 }
 
+/* =========================================================
+   ✅ NEW: Scope label normalizer (hides GLOBAL & matches UI)
+   ========================================================= */
+
+function isGlobalScope(meta = {}) {
+  const st = String(meta?.scopeType || "").toUpperCase();
+  const sid = String(meta?.scopeId || "").toUpperCase();
+  const fid = String(meta?.facilityId || "").toUpperCase();
+  const rid = String(meta?.regionId || "").toUpperCase();
+  const lid = String(meta?.labId || "").toUpperCase();
+
+  // treat empty ids as global too
+  const emptyAll = !meta?.facilityId && !meta?.regionId && !meta?.labId;
+
+  return (
+    st === "GLOBAL" ||
+    sid === "GLOBAL" ||
+    fid === "GLOBAL" ||
+    rid === "GLOBAL" ||
+    lid === "GLOBAL" ||
+    emptyAll
+  );
+}
+
+function humanScopeLabel(meta = {}, lang = "en") {
+  const isAr = String(lang || "en").toLowerCase() === "ar";
+
+  if (isGlobalScope(meta)) {
+    // ✅ your desired wording (no GLOBAL)
+    return isAr ? "وطني (كل البيانات)" : "National (All data)";
+  }
+
+  // priority: facility > region > lab
+  if (meta?.facilityId) return isAr ? `مرفق: ${meta.facilityId}` : `Facility: ${meta.facilityId}`;
+  if (meta?.regionId) return isAr ? `منطقة: ${meta.regionId}` : `Region: ${meta.regionId}`;
+  if (meta?.labId) return isAr ? `مختبر: ${meta.labId}` : `Lab: ${meta.labId}`;
+
+  // fallback
+  const x = meta?.scopeId || meta?.scopeLabel || "—";
+  return isAr ? `النطاق: ${x}` : `Scope: ${x}`;
+}
+
 function computeConfidence({ nTotal, weeks, baselineWeeksUsed, dataQuality = {} }) {
   // Conservative, explainable rules:
   // - Needs enough weeks + baseline + sample size
@@ -290,15 +332,9 @@ function buildAnalyticalContext({ method, payload, meta = {} }) {
   const tc = upper(payload?.testCode || meta.testCode || "TEST");
   const baselineWeeksUsed = payload?.baselineWeeksUsed ?? null;
 
-  const facility = meta?.facilityId ? `Facility: ${meta.facilityId}` : null;
-  const region = meta?.regionId ? `Region: ${meta.regionId}` : null;
-
-  const scopeEn = facility || region || "Scope: All data";
-  const scopeAr = meta?.facilityId
-    ? `النطاق: مرفق (${meta.facilityId})`
-    : meta?.regionId
-    ? `النطاق: منطقة (${meta.regionId})`
-    : "النطاق: جميع البيانات";
+  // ✅ use the same human scope label here too
+  const scopeEn = humanScopeLabel(meta, "en");
+  const scopeAr = humanScopeLabel(meta, "ar");
 
   const timeRange = meta?.timeRangeLabel || null;
 
@@ -308,13 +344,13 @@ function buildAnalyticalContext({ method, payload, meta = {} }) {
       `المنهج المستخدم: ${method}. ` +
       (baselineWeeksUsed != null ? `خط الأساس: أول ${baselineWeeksUsed} أسابيع ضمن السلسلة.` : `خط الأساس: غير محدد.`) +
       (timeRange ? ` الفترة: ${timeRange}. ` : " ") +
-      `${scopeAr}.`,
+      `النطاق: ${scopeAr}.`,
     en:
       `Analytical context: Data were aggregated weekly for ${tc}. ` +
       `Method used: ${method}. ` +
       (baselineWeeksUsed != null ? `Baseline: first ${baselineWeeksUsed} weeks in the series.` : `Baseline: not specified.`) +
       (timeRange ? ` Period: ${timeRange}. ` : " ") +
-      `${scopeEn}.`,
+      `Scope: ${scopeEn}.`,
   };
 }
 
@@ -372,7 +408,7 @@ function formatReportText({ header, exec, observations, context, limitations, ac
  *
  * @param {object} params
  * @param {object} params.analysis - analysis payload from analytics service (cusum/ewma/farrington)
- * @param {object} params.meta - { facilityId, regionId, scopeLabel, timeRangeLabel, testCode, signalType }
+ * @param {object} params.meta - { facilityId, regionId, labId, scopeType, scopeId, scopeLabel, timeRangeLabel, testCode, signalType }
  * @param {object} params.dataQuality - optional { missingAgeRate, missingSexRate }
  * @param {array}  params.notes - optional extra notes (bilingual or strings)
  * @param {string} params.lang - "ar" | "en" | "both"
@@ -396,16 +432,20 @@ function buildNarrativeReport({ analysis, meta = {}, dataQuality = {}, notes = [
 
   const confidence = computeConfidence({ nTotal, weeks, baselineWeeksUsed, dataQuality });
 
+  // ✅ compute once, used everywhere (no GLOBAL)
+  const scopeLabelAr = humanScopeLabel(meta, "ar");
+  const scopeLabelEn = humanScopeLabel(meta, "en");
+
   const header = {
     ar:
       `تقرير سردي من نظام PULSE للمراقبة الصحية\n` +
-      `المنشأة: ${meta.scopeLabel || "GLOBAL"}\n` +
+      `النطاق: ${scopeLabelAr}\n` +
       `الفحص: ${testCode}\n` +
       `الطريقة المستخدمة: ${method}\n` +
       `تاريخ الإنشاء: ${now}`,
     en:
       `PULSE population surveillance narrative\n` +
-      `Scope: ${meta.scopeLabel || "GLOBAL"}\n` +
+      `Scope: ${scopeLabelEn}\n` +
       `Test: ${testCode}\n` +
       `Method: ${method}\n` +
       `Generated: ${now}`,
@@ -430,7 +470,7 @@ function buildNarrativeReport({ analysis, meta = {}, dataQuality = {}, notes = [
     alert,
     method,
     direction,
-    scopeLabel: meta.scopeLabel || "GLOBAL",
+    scopeLabel: String(lang || "both").toLowerCase() === "ar" ? scopeLabelAr : scopeLabelEn,
   });
 
   const closing = {
@@ -457,8 +497,11 @@ function buildNarrativeReport({ analysis, meta = {}, dataQuality = {}, notes = [
       generatedAt: now,
       method,
       testCode,
-      scopeLabel: meta.scopeLabel || "GLOBAL",
+
+      // ✅ store the friendly scope label (not GLOBAL)
+      scopeLabel: String(lang || "both").toLowerCase() === "ar" ? scopeLabelAr : scopeLabelEn,
       timeRangeLabel: meta.timeRangeLabel || null,
+
       status: alert ? "ALERT" : "NORMAL",
       confidence: confidence.en, // keep an EN key too
       confidenceLabel: confidence,

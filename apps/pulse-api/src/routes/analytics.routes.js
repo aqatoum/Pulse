@@ -132,6 +132,45 @@ function buildBaseQuery(scope) {
 }
 
 /* ===============================
+   ✅ NEW: Human scope label (NO "GLOBAL" in narrative)
+   =============================== */
+function isGlobalScope(scope) {
+  const st = String(scope?.scopeType || "").toUpperCase();
+  const sid = String(scope?.scopeId || "").toUpperCase();
+  const fid = String(scope?.facilityId || "").toUpperCase();
+  const rid = String(scope?.regionId || "").toUpperCase();
+  const lid = String(scope?.labId || "").toUpperCase();
+
+  const emptyAll = !scope?.facilityId && !scope?.regionId && !scope?.labId;
+
+  return (
+    st === "GLOBAL" ||
+    sid === "GLOBAL" ||
+    fid === "GLOBAL" ||
+    rid === "GLOBAL" ||
+    lid === "GLOBAL" ||
+    emptyAll
+  );
+}
+
+function humanScopeLabel(scope, lang) {
+  const l = String(lang || "en").toLowerCase();
+  const isAr = l === "ar";
+
+  if (isGlobalScope(scope)) {
+    return isAr ? "وطني (كل البيانات)" : "National (All data)";
+  }
+
+  if (scope?.facilityId) return isAr ? `مرفق: ${scope.facilityId}` : `Facility: ${scope.facilityId}`;
+  if (scope?.regionId) return isAr ? `منطقة: ${scope.regionId}` : `Region: ${scope.regionId}`;
+  if (scope?.labId) return isAr ? `مختبر: ${scope.labId}` : `Lab: ${scope.labId}`;
+
+  // fallback
+  const x = scope?.scopeId || "—";
+  return isAr ? `النطاق: ${x}` : `Scope: ${x}`;
+}
+
+/* ===============================
    Time range parsing + filter
    =============================== */
 function parseISODate(d) {
@@ -313,6 +352,7 @@ function withScopeTop(scopeRes) {
       regionId: scopeRes.scope.regionId || null,
       facilityId: scopeRes.scope.facilityId || null,
     },
+    // ⛔ keep for backward compat; UI shouldn't print this directly
     facilityId: scopeRes.scope.scopeId,
   };
 }
@@ -654,7 +694,7 @@ router.get("/run", async (req, res) => {
 
 /* ===============================
    REPORT — /api/analytics/report
-   ✅ FIXED: consensus must match /run (no contradictions)
+   ✅ FIXED: remove "GLOBAL" from narrative + keep consistent
    =============================== */
 router.get("/report", async (req, res) => {
   try {
@@ -793,9 +833,14 @@ router.get("/report", async (req, res) => {
       if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn2;
     }
 
-    // ✅ Build report
+    // ✅ NEW: friendly scope label for narrative (no "GLOBAL")
+    const scopeLabelAr = humanScopeLabel(scopeRes.scope, "ar");
+    const scopeLabelEn = humanScopeLabel(scopeRes.scope, "en");
+    const scopeLabelForReport = lang === "ar" ? scopeLabelAr : scopeLabelEn;
+
+    // ✅ Build report (pass label instead of GLOBAL)
     const built = buildReport({
-      facilityId: scopeRes.scope.scopeId,
+      facilityId: scopeLabelForReport, // ✅ was scopeRes.scope.scopeId (GLOBAL)
       signalType: signal,
       testCode,
       methods,
@@ -805,6 +850,11 @@ router.get("/report", async (req, res) => {
       lang,
       weeksCount: dataQuality.weeksCoverage,
       baselineStd: results?.ewma?.baselineStd ?? null,
+
+      // (optional) some report builders accept this extra field; harmless if ignored
+      scopeLabel: scopeLabelForReport,
+      scopeType: scopeRes.scope.scopeType,
+      scopeId: scopeRes.scope.scopeId,
     });
 
     let reportText = "";
@@ -815,6 +865,31 @@ router.get("/report", async (req, res) => {
       translations = { ar: String(built?.ar || ""), en: String(built?.en || "") };
     } else {
       reportText = String(built || "");
+    }
+
+    // ✅ NEW: safety cleanup (in case buildReport prints GLOBAL anywhere)
+    const cleanOne = (txt) => {
+      if (!txt) return txt;
+      let out = String(txt);
+
+      // Arabic common patterns
+      out = out.replace(/\bGLOBAL\b/g, lang === "ar" ? scopeLabelAr : scopeLabelEn);
+      out = out.replace(/المنشأة:\s*GLOBAL/g, `النطاق: ${scopeLabelAr}`);
+      out = out.replace(/Scope:\s*GLOBAL/g, `Scope: ${scopeLabelEn}`);
+
+      // If your report uses "المنشأة" keep it consistent:
+      out = out.replace(/المنشأة:\s*(وطني.*|مرفق:.*|منطقة:.*|مختبر:.*)/g, (m) => {
+        // convert "المنشأة" to "النطاق" لتوحيد المصطلحات
+        return m.replace("المنشأة:", "النطاق:");
+      });
+
+      return out;
+    };
+
+    reportText = cleanOne(reportText);
+    if (translations) {
+      translations.ar = cleanOne(translations.ar);
+      translations.en = cleanOne(translations.en);
     }
 
     return res.json(
