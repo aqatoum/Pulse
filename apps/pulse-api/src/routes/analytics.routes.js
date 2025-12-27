@@ -231,8 +231,6 @@ function pickInterpretationForConsensus(interpretation, lang) {
 
 /* ===============================
    ✅ NEW: extract perMethod safely
-   - uses interpretation if present
-   - otherwise derives from results points
    =============================== */
 function normalizeLevel(x, fallback = "info") {
   const v = String(x || "").toLowerCase();
@@ -268,7 +266,7 @@ function extractMethodInterpretation(interpretation) {
   return null;
 }
 
-function deriveFromResult(resultObj, methodName) {
+function deriveFromResult(resultObj) {
   const pts = resultObj?.points;
   const last = latest(pts);
 
@@ -421,7 +419,7 @@ function computeDataQuality({ profile, results }) {
 }
 
 /* ===============================
-   PROFILE
+   ✅ PROFILE
    =============================== */
 router.get("/anemia-profile", async (req, res) => {
   try {
@@ -469,6 +467,7 @@ router.get("/anemia-profile", async (req, res) => {
 
 /* ===============================
    ✅ RUN — /api/analytics/run
+   ✅ FIXED: signatureInsight AFTER consensus fix
    =============================== */
 router.get("/run", async (req, res) => {
   try {
@@ -544,7 +543,7 @@ router.get("/run", async (req, res) => {
       }
     }
 
-    // ✅ Profile (stratification)
+    // ✅ Profile
     const profOut =
       signal === "anemia"
         ? computeAnemiaProfile({ rows, lang: "both" })
@@ -553,28 +552,18 @@ router.get("/run", async (req, res) => {
     const profile = profOut?.profile || null;
     const profileInsight = profOut?.insight || null;
 
-    // ✅ First consensus (may be incomplete)
+    // ✅ First consensus (service)
     let consensus = buildConsensus({ interpretations, methods });
 
-    // ✅ IMPORTANT: signatureInsight must be built AFTER consensus is finalized
-    let signatureInsight = null;
-
-    const dataQuality = computeDataQuality({ profile, results });
-
     // ==========================
-    // ✅ FIX #1: ensure consensus.perMethod is filled + decision matches points
+    // ✅ FIX #1: ensure consensus.perMethod is filled & consistent
     // ==========================
     const perMethod = {};
     for (const method of methods) {
       const interp = extractMethodInterpretation(interpretations?.[method]);
-      if (interp) {
-        perMethod[method] = interp;
-      } else {
-        const r = results?.[method];
-        perMethod[method] = deriveFromResult(r, method);
-      }
+      if (interp) perMethod[method] = interp;
+      else perMethod[method] = deriveFromResult(results?.[method]);
     }
-
     const computedConsensus = computeConsensusFromPerMethod(perMethod);
 
     consensus = {
@@ -584,20 +573,8 @@ router.get("/run", async (req, res) => {
       perMethod: computedConsensus.perMethod,
     };
 
-    // ==========================
-    // ✅ FIX #2: data quality note ALWAYS when data insufficient
-    // ==========================
-    const notEnoughData = (dataQuality?.overallN ?? 0) < 20 || (dataQuality?.weeksCoverage ?? 0) < 4;
-
-    // downgrade rule (optional safety)
-    if (notEnoughData && String(consensus?.decision || "").toLowerCase() === "alert") {
-      consensus.decision = "watch";
-    }
-
-    // ==========================
-    // ✅ Build Signature Insight AFTER final consensus (no contradictions)
-    // ==========================
-    signatureInsight =
+    // ✅ Signature Insight (NOW uses corrected consensus)
+    const signatureInsight =
       lang === "both"
         ? {
             ar: {
@@ -614,7 +591,13 @@ router.get("/run", async (req, res) => {
             stratificationKeyFinding: profileInsight?.en?.keyFinding ?? null,
           };
 
-    // attach data quality note (after signatureInsight exists)
+    const dataQuality = computeDataQuality({ profile, results });
+
+    // ==========================
+    // ✅ FIX #2: data quality note ALWAYS when insufficient
+    // ==========================
+    const notEnoughData = (dataQuality?.overallN ?? 0) < 20 || (dataQuality?.weeksCoverage ?? 0) < 4;
+
     if (notEnoughData) {
       const noteAr =
         "ملاحظة جودة: حجم العينة أو التغطية الزمنية غير كافيين للحكم بثقة عالية. اعتبر النتيجة استرشادية حتى تتوفر بيانات أكثر.";
@@ -623,14 +606,16 @@ router.get("/run", async (req, res) => {
 
       if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr;
       if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn;
+    }
 
-      // if downgrade happened, override with stronger note
-      if (String(consensus?.decision || "").toLowerCase() === "watch") {
-        const noteAr2 = "ملاحظة جودة: تم تخفيض القرار من ALERT إلى WATCH لأن البيانات غير كافية لإنذار موثوق.";
-        const noteEn2 = "Data quality note: Decision was downgraded from ALERT to WATCH due to insufficient data for a reliable alert.";
-        if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr2;
-        if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn2;
-      }
+    if (notEnoughData && String(consensus?.decision || "").toLowerCase() === "alert") {
+      consensus.decision = "watch";
+      const noteAr2 =
+        "ملاحظة جودة: تم تخفيض القرار من ALERT إلى WATCH لأن البيانات غير كافية لإنذار موثوق.";
+      const noteEn2 =
+        "Data quality note: Decision was downgraded from ALERT to WATCH due to insufficient data for a reliable alert.";
+      if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr2;
+      if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn2;
     }
 
     return res.json(
@@ -753,11 +738,12 @@ router.get("/report", async (req, res) => {
     const profile = profOut?.profile || null;
     const profileInsight = profOut?.insight || null;
 
+    // ✅ Make consensus consistent with method points
     const perMethod = {};
     for (const method of methods) {
       const interp = extractMethodInterpretation(interpretationsForConsensus?.[method]);
       if (interp) perMethod[method] = interp;
-      else perMethod[method] = deriveFromResult(results?.[method], method);
+      else perMethod[method] = deriveFromResult(results?.[method]);
     }
     const computedConsensus = computeConsensusFromPerMethod(perMethod);
 
@@ -807,6 +793,7 @@ router.get("/report", async (req, res) => {
       if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn2;
     }
 
+    // ✅ Build report
     const built = buildReport({
       facilityId: scopeRes.scope.scopeId,
       signalType: signal,
@@ -818,9 +805,6 @@ router.get("/report", async (req, res) => {
       lang,
       weeksCount: dataQuality.weeksCoverage,
       baselineStd: results?.ewma?.baselineStd ?? null,
-
-      dataQuality,
-      decision: consensus?.decision,
     });
 
     let reportText = "";

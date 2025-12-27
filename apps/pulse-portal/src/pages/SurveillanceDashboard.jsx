@@ -316,6 +316,22 @@ const styles = `
     .miniVal{ text-align: start; }
     .statusMain{ grid-template-columns: 1fr; }
   }
+
+  /* chips (missing in your pasted snippet) */
+  .chipBtn{
+    border-radius: 999px;
+    padding: 8px 12px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.14);
+    color: var(--text);
+    font-weight: 950;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .chipBtnOn{
+    background: rgba(255,255,255,0.14);
+    border-color: rgba(255,255,255,0.24);
+  }
 `;
 
 /* =========================
@@ -356,6 +372,67 @@ function decisionTheme(decisionUpper) {
   if (d === "ALERT") return { key: "alert", color: "var(--alert)" };
   if (d === "WATCH") return { key: "watch", color: "var(--watch)" };
   return { key: "info", color: "var(--info)" };
+}
+
+/* =========================
+   ✅ UI Decision Logic (Consensus vs single-method)
+   - prevents single-method ALERT from showing as "إنذار" in UI
+   ========================= */
+function normDecision(x) {
+  const v = String(x || "").toLowerCase();
+  if (v === "alert" || v === "watch" || v === "info") return v;
+  return "info";
+}
+
+function lastPointHasAlert(obj) {
+  const pts = obj?.points;
+  if (!Array.isArray(pts) || !pts.length) return false;
+  const last = pts[pts.length - 1];
+  return last?.alert === true || last?.isAlert === true || last?.flag === true || last?.alarm === true;
+}
+
+function deriveDecisionFromResults(results) {
+  const ewmaA = lastPointHasAlert(results?.ewma);
+  const cusumA = lastPointHasAlert(results?.cusum);
+  const farrA = lastPointHasAlert(results?.farrington);
+
+  const alertCount = [ewmaA, cusumA, farrA].filter(Boolean).length;
+
+  if (alertCount >= 2) return "alert";
+  if (alertCount === 1) return "watch";
+  return "info";
+}
+
+function computeUiDecision(runData) {
+  const d = normDecision(runData?.consensus?.decision);
+
+  const pm = runData?.consensus?.perMethod || {};
+  const methodLevels = Object.values(pm).map((x) => String(x?.alertLevel || "").toLowerCase());
+  const consensusAlertCount = methodLevels.filter((x) => x === "alert").length;
+
+  if (d === "alert" && consensusAlertCount === 1) return "watch";
+  if (d) return d;
+
+  return deriveDecisionFromResults(runData?.results || {});
+}
+
+function listMethodAlerts(runData) {
+  const pm = runData?.consensus?.perMethod || {};
+  const out = [];
+
+  for (const k of Object.keys(pm)) {
+    const lvl = String(pm[k]?.alertLevel || "").toLowerCase();
+    if (lvl === "alert") out.push(k.toUpperCase());
+  }
+
+  if (!out.length) {
+    const r = runData?.results || {};
+    if (lastPointHasAlert(r.ewma)) out.push("EWMA");
+    if (lastPointHasAlert(r.cusum)) out.push("CUSUM");
+    if (lastPointHasAlert(r.farrington)) out.push("FARRINGTON");
+  }
+
+  return out;
 }
 
 /* =========================
@@ -709,9 +786,16 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
   // ✅ Derived view model (only after runData exists)
   const consensus = runData?.consensus;
-  const decision = upper(consensus?.decision || "info");
+
+  // ✅ القرار الذي سيظهر في UI (يعالج single-method alert => WATCH)
+  const uiDecision = computeUiDecision(runData); // "info" | "watch" | "alert"
+  const decision = upper(uiDecision);            // "INFO" | "WATCH" | "ALERT"
+
   const theme = decisionTheme(decision);
   const decisionKey = theme.key;
+
+  // ✅ أسماء الطرق التي أعطت Alert فعلاً
+  const methodAlerts = listMethodAlerts(runData);
 
   const weekly = runData?.meta?.weekly || runData?.meta?.meta?.weekly || runData?.weekly || null;
 
@@ -766,15 +850,15 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   })();
 
   const actionsText = (() => {
-    if (decision === "ALERT") {
+    if (uiDecision === "alert") {
       return lang === "ar"
         ? "يوصى بمراجعة الوضع فورًا: تأكيد جودة البيانات، ثم فحص التقسيم السكاني والمرفق/المنطقة الأكثر مساهمة."
         : "Immediate review recommended: validate data quality, then inspect subgroups and contributing facility/region.";
     }
-    if (decision === "WATCH") {
+    if (uiDecision === "watch") {
       return lang === "ar"
-        ? "يوصى بالمتابعة القريبة خلال الأسابيع القادمة مع مقارنة النطاق (وطني/منطقة/مرفق) عند توفر بيانات كافية."
-        : "Close monitoring recommended over coming weeks; compare scopes (global/region/facility) when data grows.";
+        ? "إشارة تستدعي المراقبة: هناك إنذار من طريقة واحدة على الأقل. يُنصح بالمتابعة القريبة خلال الأسابيع القادمة ومقارنة النطاق عند توفر بيانات أكثر."
+        : "Monitoring signal: at least one method triggered an alert. Follow closely over the coming weeks and compare scope as more data arrive.";
     }
     return lang === "ar"
       ? "لا يوجد إجراء عاجل. الاستمرار في الرصد ورفع العينة لتحسين الثقة."
@@ -830,10 +914,10 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             <Dropdown dir={isRTL ? "rtl" : "ltr"} value={scopeMode} onChange={(v) => setScopeMode(v)} options={getScopeOptions(t)} />
           </div>
 
-          {/* ✅ Reports button here (instead of labId field) */}
+          {/* ✅ Reports button here */}
           <div className="actions" style={{ alignSelf: "end" }}>
             <button type="button" className="ghostBtn" onClick={loadUploadsReport} disabled={reportLoading}>
-              {reportLoading ? (lang === "ar" ? "..." : "...") : (lang === "ar" ? "تقرير الرفعات" : "Uploads Report")}
+              {reportLoading ? "..." : (lang === "ar" ? "تقرير الرفعات" : "Uploads Report")}
             </button>
           </div>
         </div>
@@ -1105,7 +1189,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             </button>
 
             <button type="button" className="ghostBtn" onClick={resetRun} disabled={loading && !runData}>
-              {lang === "ar" ? "Reset" : "Reset"}
+              Reset
             </button>
 
             <button type="button" className="ghostBtn" onClick={copyReport} disabled={!reportText || loading}>
@@ -1228,6 +1312,16 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   <div>
                     <b>{t.actions}</b> — {actionsText}
                   </div>
+
+                  {/* ✅ explain single-method alerts */}
+                  {methodAlerts?.length ? (
+                    <div style={{ marginTop: 2 }}>
+                      <b>{lang === "ar" ? "ملاحظة:" : "Note:"}</b>{" "}
+                      {lang === "ar"
+                        ? `تم رصد إنذار إحصائي بواسطة: ${methodAlerts.join(" + ")}. الحالة الرئيسية تعتمد قرار النظام (Consensus) وليس إنذار طريقة واحدة.`
+                        : `A statistical alert was detected by: ${methodAlerts.join(" + ")}. The main status follows system consensus, not a single-method alert.`}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="actions" style={{ justifyContent: "flex-start", marginTop: 12 }}>
@@ -1242,7 +1336,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           {/* Technical details are hidden by default */}
           {showDetails ? (
             <>
-              
               <div className="card cardWide">
                 <div className="cardHeader">
                   <div className="cardTitle">{t.chartsTitle}</div>
