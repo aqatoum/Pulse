@@ -1,24 +1,27 @@
+// apps/pulse-api/src/server.js
 const express = require("express");
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
 const cors = require("cors");
 
+dotenv.config();
+
 const uploadRoutes = require("./routes/upload.routes");
 const ingestRoutes = require("./routes/ingest.routes");
 const analyticsRoutes = require("./routes/analytics.routes");
 
-const Upload = require("./models/Upload");
+// ✅ NEW: narrative report endpoint (matches the report service you updated)
+const reportsRoutes = require("./routes/reports.routes");
 
-// Loads .env locally (Cloud Run uses real env vars; this won't hurt)
-dotenv.config();
+const Upload = require("./models/Upload");
 
 const app = express();
 
-// ✅ Cloud Run provides PORT (usually 8080)
+/* =========================
+   ✅ Runtime config (Cloud Run friendly)
+   ========================= */
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = "0.0.0.0";
-
-// ✅ MUST be provided in Cloud Run Variables & Secrets
 const MONGODB_URI = process.env.MONGODB_URI;
 
 /* =========================
@@ -39,16 +42,14 @@ const allowedOrigins = [
 
 app.use(
   cors({
-    origin: function (origin, cb) {
-      if (!origin) return cb(null, true); // allow non-browser calls
+    origin(origin, cb) {
+      if (!origin) return cb(null, true); // allow server-to-server & tools
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked for origin: ${origin}`));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "Accept"],
-
-
   })
 );
 
@@ -65,17 +66,23 @@ function healthPayload(extra = {}) {
     version: "1.0.0",
     timestamp: new Date().toISOString(),
     mongo: {
-      connected: mongoose.connection?.readyState === 1, // 1 = connected
+      connected: mongoose.connection?.readyState === 1,
       state: mongoose.connection?.readyState ?? null,
     },
     endpoints: {
       health: "/api/health",
       legacyHealth: "/health",
+
       ingest: "/api/ingest",
       analytics: "/api/analytics",
       upload: "/api/upload",
+
+      // existing registry endpoints
       reportUploads: "/api/report/uploads",
       reportSummary: "/api/report/summary",
+
+      // ✅ new narrative report endpoint
+      reports: "/api/reports/:signal",
     },
     ...extra,
   };
@@ -90,16 +97,14 @@ app.get("/api/health", (req, res) => res.json(healthPayload()));
 app.get("/", (req, res) => {
   res.json({
     ...healthPayload({
-      env: {
-        hasMongoUri: Boolean(process.env.MONGODB_URI),
-      },
+      env: { hasMongoUri: Boolean(process.env.MONGODB_URI) },
     }),
     message: "Welcome to PULSE API. Use /api/health for status.",
   });
 });
 
 /* =========================
-   ✅ REPORT ROUTES (Uploads Registry)
+   ✅ REPORT ROUTES (Uploads Registry)  [KEEP AS-IS]
    ========================= */
 
 /**
@@ -247,6 +252,9 @@ app.use("/api/ingest", ingestRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/upload", uploadRoutes);
 
+// ✅ NEW: narrative reports (no conflict with /api/report/*)
+app.use("/api/reports", reportsRoutes);
+
 /* =========================
    ✅ 404 (JSON)
    ========================= */
@@ -273,22 +281,18 @@ app.use((err, req, res, next) => {
 });
 
 /* =========================
-   ✅ START SERVER FIRST (Cloud Run)
+   ✅ Start server (Cloud Run)
    ========================= */
 app.listen(PORT, HOST, () => {
   console.log(`🚀 PULSE API listening on ${HOST}:${PORT}`);
-  console.log(
-    `🔎 ENV CHECK: MONGODB_URI present? ${Boolean(process.env.MONGODB_URI)}`
-  );
+  console.log(`🔎 ENV CHECK: MONGODB_URI present? ${Boolean(process.env.MONGODB_URI)}`);
 });
 
 /* =========================
-   ✅ MongoDB connection events (debug)
+   ✅ MongoDB connection events
    ========================= */
 mongoose.connection.on("connected", () => console.log("✅ MongoDB connected"));
-mongoose.connection.on("disconnected", () =>
-  console.log("⚠️ MongoDB disconnected")
-);
+mongoose.connection.on("disconnected", () => console.log("⚠️ MongoDB disconnected"));
 mongoose.connection.on("error", (e) =>
   console.error("❌ MongoDB error:", e?.message || e)
 );
@@ -300,12 +304,10 @@ mongoose.connection.on("error", (e) =>
   try {
     if (!MONGODB_URI) {
       console.error("❌ MONGODB_URI is missing in env");
-      return; // do not kill the server
+      return;
     }
-
     await mongoose.connect(MONGODB_URI);
   } catch (err) {
     console.error("❌ MongoDB connection failed:", err?.message || err);
-    // ❗ no process.exit
   }
 })();
