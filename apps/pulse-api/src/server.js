@@ -4,22 +4,19 @@ const mongoose = require("mongoose");
 const dotenv = require("dotenv");
 const cors = require("cors");
 
-dotenv.config();
-
 const uploadRoutes = require("./routes/upload.routes");
 const ingestRoutes = require("./routes/ingest.routes");
 const analyticsRoutes = require("./routes/analytics.routes");
 
-// ✅ NEW: narrative report endpoint (matches the report service you updated)
+// ✅ NEW: narrative reports endpoint
 const reportsRoutes = require("./routes/reports.routes");
 
 const Upload = require("./models/Upload");
 
+dotenv.config();
+
 const app = express();
 
-/* =========================
-   ✅ Runtime config (Cloud Run friendly)
-   ========================= */
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = "0.0.0.0";
 const MONGODB_URI = process.env.MONGODB_URI;
@@ -42,8 +39,8 @@ const allowedOrigins = [
 
 app.use(
   cors({
-    origin(origin, cb) {
-      if (!origin) return cb(null, true); // allow server-to-server & tools
+    origin: function (origin, cb) {
+      if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked for origin: ${origin}`));
     },
@@ -72,16 +69,15 @@ function healthPayload(extra = {}) {
     endpoints: {
       health: "/api/health",
       legacyHealth: "/health",
-
       ingest: "/api/ingest",
       analytics: "/api/analytics",
       upload: "/api/upload",
 
-      // existing registry endpoints
+      // existing
       reportUploads: "/api/report/uploads",
       reportSummary: "/api/report/summary",
 
-      // ✅ new narrative report endpoint
+      // ✅ NEW
       reports: "/api/reports/:signal",
     },
     ...extra,
@@ -104,13 +100,10 @@ app.get("/", (req, res) => {
 });
 
 /* =========================
-   ✅ REPORT ROUTES (Uploads Registry)  [KEEP AS-IS]
+   ✅ REPORT ROUTES (Uploads Registry)
    ========================= */
 
-/**
- * GET /api/report/uploads
- * Query options: ?limit=200&skip=0
- */
+// GET /api/report/uploads
 app.get("/api/report/uploads", async (req, res, next) => {
   try {
     const limit = Math.min(Number(req.query.limit || 200), 500);
@@ -128,17 +121,14 @@ app.get("/api/report/uploads", async (req, res, next) => {
         sha256: 1,
         source: 1,
         schema: 1,
-
         rowsParsed: 1,
         rowsAccepted: 1,
         rowsRejected: 1,
         totalTests: 1,
-
         facilityIds: 1,
         regionIds: 1,
         dateRange: 1,
         testsByCode: 1,
-
         createdAt: 1,
         completedAt: 1,
       })
@@ -158,21 +148,15 @@ app.get("/api/report/uploads", async (req, res, next) => {
           sha256: u.sha256 || null,
           source: u.source || null,
           schema: u.schema || null,
-
           rowsParsed: u.rowsParsed ?? null,
           rowsAccepted: u.rowsAccepted ?? null,
           rowsRejected: u.rowsRejected ?? null,
           totalTests: u.totalTests ?? u.rowsAccepted ?? null,
-
           facilityIds: Array.isArray(u.facilityIds) ? u.facilityIds : [],
           regionIds: Array.isArray(u.regionIds) ? u.regionIds : [],
           dateRange: u.dateRange || { start: null, end: null },
-
           testsByCode:
-            u.testsByCode && typeof u.testsByCode === "object"
-              ? u.testsByCode
-              : {},
-
+            u.testsByCode && typeof u.testsByCode === "object" ? u.testsByCode : {},
           createdAt: u.createdAt || null,
           completedAt: u.completedAt || null,
         })),
@@ -183,9 +167,7 @@ app.get("/api/report/uploads", async (req, res, next) => {
   }
 });
 
-/**
- * GET /api/report/summary
- */
+// GET /api/report/summary
 app.get("/api/report/summary", async (req, res, next) => {
   try {
     const all = await Upload.find({})
@@ -214,8 +196,7 @@ app.get("/api/report/summary", async (req, res, next) => {
       const tt = Number(u.totalTests ?? u.rowsAccepted ?? 0);
       if (Number.isFinite(tt)) grandTotalTests += tt;
 
-      const map =
-        u.testsByCode && typeof u.testsByCode === "object" ? u.testsByCode : {};
+      const map = u.testsByCode && typeof u.testsByCode === "object" ? u.testsByCode : {};
       for (const [k, v] of Object.entries(map)) {
         const code = String(k).toUpperCase();
         const n = Number(v || 0);
@@ -234,9 +215,7 @@ app.get("/api/report/summary", async (req, res, next) => {
         facilityIds: Array.from(facilities).sort(),
         regionIds: Array.from(regions).sort(),
         testsByCode: Object.fromEntries(
-          Object.entries(totalsByTest).sort((a, b) =>
-            String(a[0]).localeCompare(String(b[0]))
-          )
+          Object.entries(totalsByTest).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
         ),
       },
     });
@@ -289,13 +268,11 @@ app.listen(PORT, HOST, () => {
 });
 
 /* =========================
-   ✅ MongoDB connection events
+   ✅ MongoDB connection events (debug)
    ========================= */
 mongoose.connection.on("connected", () => console.log("✅ MongoDB connected"));
 mongoose.connection.on("disconnected", () => console.log("⚠️ MongoDB disconnected"));
-mongoose.connection.on("error", (e) =>
-  console.error("❌ MongoDB error:", e?.message || e)
-);
+mongoose.connection.on("error", (e) => console.error("❌ MongoDB error:", e?.message || e));
 
 /* =========================
    ✅ Connect MongoDB (non-blocking)
