@@ -15,9 +15,29 @@ function normalizeLang(lang) {
   return "en";
 }
 
+function upper(x) {
+  return String(x || "").trim().toUpperCase();
+}
+
+/**
+ * ✅ NEW: make scope label human + consistent, and avoid showing "GLOBAL" in Arabic
+ */
+function formatScopeValue(lang, facilityId) {
+  const L = normalizeLang(lang);
+  const id = String(facilityId ?? "").trim();
+  const idU = upper(id);
+
+  // Global scope
+  if (!id || idU === "GLOBAL") {
+    return L === "ar" ? "وطني (كل البيانات)" : "GLOBAL (All data)";
+  }
+
+  // Facility/Region/Lab ids remain as-is (you can enhance later if you have names)
+  return id;
+}
+
 // Simple, defensible confidence heuristic
 function computeConfidence({ overallN, weeksCount, hasBaselineVariance }) {
-  // weeksCount may be unknown here; caller can pass it later. We keep it optional.
   const w = typeof weeksCount === "number" && Number.isFinite(weeksCount) ? weeksCount : null;
 
   if (overallN >= 50 && (w === null || w >= 8) && hasBaselineVariance) return "high";
@@ -31,12 +51,12 @@ function confidenceLabel(lang, level) {
   const mapEn = {
     high: "High confidence",
     moderate: "Moderate confidence",
-    low: "Low confidence"
+    low: "Low confidence",
   };
   const mapAr = {
     high: "ثقة عالية",
     moderate: "ثقة متوسطة",
-    low: "ثقة منخفضة"
+    low: "ثقة منخفضة",
   };
   return l === "ar" ? (mapAr[v] || mapAr.low) : (mapEn[v] || mapEn.low);
 }
@@ -85,9 +105,8 @@ function buildReportText({
   signatureInsight,
   profile,
   lang = "en",
-  // optional: if later you pass more meta
-  weeksCount = null, // number of time-buckets used (if known)
-  baselineStd = null // if known from a method (EWMA etc.)
+  weeksCount = null,
+  baselineStd = null,
 }) {
   const L = normalizeLang(lang);
   const sig = getSignal(signalType);
@@ -96,33 +115,28 @@ function buildReportText({
   const overallLow = profile?.overall?.low ?? 0;
   const overallRate = profile?.overall?.lowRate ?? null;
 
-  // Data quality notes (defensible and simple)
+  // Data quality notes
   const smallN = overallN < 20;
   const subgroupMinN = 10;
 
   const top = Array.isArray(profile?.byAgeSex)
     ? profile.byAgeSex
-        .filter(g => (g.n ?? 0) >= subgroupMinN && typeof g.lowRate === "number")
+        .filter((g) => (g.n ?? 0) >= subgroupMinN && typeof g.lowRate === "number")
         .sort((a, b) => b.lowRate - a.lowRate)[0]
     : null;
 
   const decision = consensus?.decision || "info";
   const counts = consensus?.counts || { alert: 0, watch: 0 };
 
-  const methodList = methods.map(m => String(m).toUpperCase()).join(L === "ar" ? "، " : ", ");
+  const methodList = methods.map((m) => String(m).toUpperCase()).join(L === "ar" ? "، " : ", ");
 
   const sigNameEn = sig?.description?.en || signalType;
   const sigNameAr = sig?.description?.ar || signalType;
 
-  // Pull narrative insight if already generated
-  const insightEn =
-    typeof signatureInsight?.en?.narrative === "string" ? signatureInsight.en.narrative : null;
-  const insightAr =
-    typeof signatureInsight?.ar?.narrative === "string" ? signatureInsight.ar.narrative : null;
+  const insightEn = typeof signatureInsight?.en?.narrative === "string" ? signatureInsight.en.narrative : null;
+  const insightAr = typeof signatureInsight?.ar?.narrative === "string" ? signatureInsight.ar.narrative : null;
 
-  const hasBaselineVariance =
-    typeof baselineStd === "number" ? baselineStd > 0 : true; // default true if unknown
-
+  const hasBaselineVariance = typeof baselineStd === "number" ? baselineStd > 0 : true;
   const conf = computeConfidence({ overallN, weeksCount, hasBaselineVariance });
   const confLabel = confidenceLabel(L, conf);
 
@@ -141,7 +155,7 @@ function buildReportText({
     `Data quality notes:`,
     `- Sample size: ${overallN} tests (small-N risk: ${smallN ? "YES" : "NO"}).`,
     weeksCount !== null ? `- Time coverage: ${weeksCount} time-buckets.` : null,
-    `- Subgroup comparisons require sufficient samples (≥${subgroupMinN}).`
+    `- Subgroup comparisons require sufficient samples (≥${subgroupMinN}).`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -150,7 +164,7 @@ function buildReportText({
     `ملاحظات جودة البيانات:`,
     `- حجم العينة: ${overallN} فحصًا (خطر العينة الصغيرة: ${smallN ? "نعم" : "لا"}).`,
     weeksCount !== null ? `- التغطية الزمنية: ${weeksCount} وحدات زمنية.` : null,
-    `- المقارنات بين الفئات تتطلب عينة كافية (≥${subgroupMinN}).`
+    `- المقارنات بين الفئات تتطلب عينة كافية (≥${subgroupMinN}).`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -172,9 +186,14 @@ function buildReportText({
     `ملخص البيانات: ${overallN} فحصًا؛ ${overallLow} حالات منخفضة/غير طبيعية` +
     ` (المعدل الإجمالي ${overallRate !== null ? pct(overallRate) + "%" : "غير متاح"}).`;
 
+  // ✅ NEW: consistent scope line, no GLOBAL in Arabic
+  const scopeValue = formatScopeValue(L, facilityId);
+  const scopeLineEn = `Scope: ${scopeValue}`;
+  const scopeLineAr = `النطاق: ${scopeValue}`;
+
   const coreEn =
     `${headerEn}\n` +
-    `Facility: ${facilityId}\n` +
+    `${scopeLineEn}\n` +
     `Signal: ${safe(sigNameEn)}\n` +
     `Methods: ${safe(methodList)}\n` +
     `${summaryLineEn}\n` +
@@ -188,7 +207,7 @@ function buildReportText({
 
   const coreAr =
     `${headerAr}\n` +
-    `المنشأة: ${facilityId}\n` +
+    `${scopeLineAr}\n` +
     `الإشارة: ${safe(sigNameAr, "غير محدد")}\n` +
     `الطرق المستخدمة: ${safe(methodList, "غير محدد")}\n` +
     `${summaryLineAr}\n` +
@@ -214,7 +233,7 @@ function buildReport(args) {
   if (L === "both") {
     return {
       ar: buildReportText({ ...args, lang: "ar" }),
-      en: buildReportText({ ...args, lang: "en" })
+      en: buildReportText({ ...args, lang: "en" }),
     };
   }
   return buildReportText({ ...args, lang: L });
