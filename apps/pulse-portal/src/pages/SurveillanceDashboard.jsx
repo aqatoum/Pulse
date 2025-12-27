@@ -1,3 +1,4 @@
+// apps/pulse-portal/src/pages/SurveillanceDashboard.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import DecisionCard from "../components/DecisionCard.jsx";
 import SimpleSeriesChart from "../components/SimpleSeriesChart.jsx";
@@ -317,7 +318,7 @@ const styles = `
     .statusMain{ grid-template-columns: 1fr; }
   }
 
-  /* chips (missing in your pasted snippet) */
+  /* chips */
   .chipBtn{
     border-radius: 999px;
     padding: 8px 12px;
@@ -360,10 +361,8 @@ function computeConfidence(meta) {
   const overallN = dq?.overallN ?? dq?.n ?? null;
   const weeksCoverage = dq?.weeksCoverage ?? dq?.weeks ?? null;
 
-  if (typeof overallN === "number" && overallN >= 200 && typeof weeksCoverage === "number" && weeksCoverage >= 12)
-    return "high";
-  if (typeof overallN === "number" && overallN >= 60 && typeof weeksCoverage === "number" && weeksCoverage >= 6)
-    return "med";
+  if (typeof overallN === "number" && overallN >= 200 && typeof weeksCoverage === "number" && weeksCoverage >= 12) return "high";
+  if (typeof overallN === "number" && overallN >= 60 && typeof weeksCoverage === "number" && weeksCoverage >= 6) return "med";
   return "low";
 }
 
@@ -375,8 +374,10 @@ function decisionTheme(decisionUpper) {
 }
 
 /* =========================
-   ✅ UI Decision Logic (Consensus vs single-method)
-   - prevents single-method ALERT from showing as "إنذار" in UI
+   ✅ UI Decision Logic
+   ✅ IMPORTANT CHANGE:
+   - We now "lock" UI status to REPORT consensus if available
+   - because report & run must never contradict.
    ========================= */
 function normDecision(x) {
   const v = String(x || "").toLowerCase();
@@ -406,6 +407,7 @@ function deriveDecisionFromResults(results) {
 function computeUiDecision(runData) {
   const d = normDecision(runData?.consensus?.decision);
 
+  // extra guard: single-method alert => show WATCH
   const pm = runData?.consensus?.perMethod || {};
   const methodLevels = Object.values(pm).map((x) => String(x?.alertLevel || "").toLowerCase());
   const consensusAlertCount = methodLevels.filter((x) => x === "alert").length;
@@ -456,7 +458,7 @@ function StratCard({ title, items, getKey, t }) {
           const label = getKey(it);
           const n = Number(it?.n || 0);
           const rate = pickRate(it);
-          const pct = fmtPctStrat(rate);
+          const pctS = fmtPctStrat(rate);
           const weight = Math.round((n / maxN) * 100);
 
           return (
@@ -464,10 +466,10 @@ function StratCard({ title, items, getKey, t }) {
               <div className="row">
                 <div className="rowLabel">{label}</div>
                 <div className="rowCount">{Number.isFinite(n) ? n : "—"}</div>
-                <div className="rowPct">{pct}</div>
+                <div className="rowPct">{pctS}</div>
               </div>
 
-              <div className="bar" title={`${t.cases}: ${pickCases(it) ?? "—"} • ${t.signalRate}: ${pct}`}>
+              <div className="bar" title={`${t.cases}: ${pickCases(it) ?? "—"} • ${t.signalRate}: ${pctS}`}>
                 <div
                   className="fill"
                   style={{
@@ -491,12 +493,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const t = useMemo(() => TXT[lang] || TXT.en, [lang]);
   const isRTL = lang === "ar";
 
-  const apiBase =
-    import.meta.env.VITE_API_BASE_URL ||
-    import.meta.env.VITE_API_URL ||
-    "http://localhost:4000";
+  const apiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://localhost:4000";
 
-  // ✅ Scope (no LabId anymore)
+  // ✅ Scope
   const [scopeMode, setScopeMode] = useState("global");
   const [facilityId, setFacilityId] = useState("");
   const [regionId, setRegionId] = useState("");
@@ -507,11 +506,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const derivedSignalLabel = useMemo(() => getSignalLabel(t, derivedSignal), [t, derivedSignal]);
 
   // ✅ Methods
-  const [methods, setMethods] = useState({
-    ewma: true,
-    cusum: true,
-    farrington: true,
-  });
+  const [methods, setMethods] = useState({ ewma: true, cusum: true, farrington: true });
 
   // ✅ Time filter + preset
   const [startDate, setStartDate] = useState("");
@@ -557,10 +552,10 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [dataRange, setDataRange] = useState(null);
 
-  // Charts payload from RUN (general)
+  // Charts payload from RUN
   const [chartsPayload, setChartsPayload] = useState(null);
 
-  // ✅ Upload state from UploadCsv component (normalized payload)
+  // ✅ Upload state
   const [lastUpload, setLastUpload] = useState(null);
 
   // technical details collapsed by default
@@ -625,9 +620,15 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
       params.set("ewmaLambda", String(clampNum(ewmaLambda, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max)));
       params.set("ewmaL", String(clampNum(ewmaL, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max)));
-      params.set("ewmaBaselineN", String(clampInt(ewmaBaselineN, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max)));
+      params.set(
+        "ewmaBaselineN",
+        String(clampInt(ewmaBaselineN, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max))
+      );
 
-      params.set("cusumBaselineN", String(clampInt(cusumBaselineN, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max)));
+      params.set(
+        "cusumBaselineN",
+        String(clampInt(cusumBaselineN, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max))
+      );
       params.set("cusumK", String(clampNum(cusumK, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max)));
       params.set("cusumH", String(clampNum(cusumH, BOUNDS.cusum.h.min, BOUNDS.cusum.h.max)));
 
@@ -652,6 +653,14 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     return core;
   }
 
+  /* ======================================================
+     ✅ RUN (fixed)
+     ✅ What we changed to kill contradictions permanently:
+     1) Always send EXACT same params to run/report (scopeParams)
+     2) Add cache-bust param _ts for report
+     3) Force UI to use report.meta.consensus as "source of truth"
+        -> overwrites runData.consensus if report provides it
+     ====================================================== */
   async function runAnalysis() {
     const m = selectedMethods();
     if (!m.length) return;
@@ -684,37 +693,53 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     try {
       const scopeParams = buildScopeQuery();
 
-      // Run endpoint
+      // ---------- RUN ----------
       const runParams = new URLSearchParams(scopeParams);
       runParams.set("signal", derivedSignal);
       runParams.set("methods", m.join(","));
       runParams.set("lang", "both");
 
       const runJ = await fetchJSON(`${apiBase}/api/analytics/run?${runParams.toString()}`, controller.signal);
-      setRunData(runJ?.data || null);
+      const runPayload = runJ?.data || null;
+      setRunData(runPayload);
 
       const dr1 = extractDateRange(runJ);
       if (dr1) setDataRange(dr1);
 
-      const results = runJ?.data?.results || {};
+      const results = runPayload?.results || {};
       setChartsPayload({
         ewma: results?.ewma ? { data: { ewma: results.ewma } } : null,
         cusum: results?.cusum ? { data: { cusum: results.cusum } } : null,
         farrington: results?.farrington ? { data: { farrington: results.farrington } } : null,
       });
 
-      // Report endpoint
+      // ---------- REPORT ----------
       const reportParams = new URLSearchParams(scopeParams);
       reportParams.set("signal", derivedSignal);
       reportParams.set("testCode", String(testCode));
       reportParams.set("methods", m.join(","));
       reportParams.set("lang", lang);
 
+      // cache bust to avoid "looks like deploy didn't work"
+      reportParams.set("_ts", String(Date.now()));
+
       const repJ = await fetchJSON(`${apiBase}/api/analytics/report?${reportParams.toString()}`, controller.signal);
+
+      // ✅ Get report text
       const extracted = extractReport(repJ?.data?.report, lang);
       const finalReport = (extracted?.trim() ? extracted : "").trim();
       setReportText(finalReport || t.insufficient);
 
+      // ✅ HARD FIX: source-of-truth consensus from REPORT meta
+      const repConsensus = repJ?.data?.meta?.consensus || repJ?.data?.meta?.meta?.consensus || null;
+      if (repConsensus) {
+        setRunData((prev) => {
+          if (!prev) return prev;
+          return { ...prev, consensus: repConsensus };
+        });
+      }
+
+      // health timestamp (optional)
       try {
         const hj = await fetchJSON(`${apiBase}/health`, controller.signal);
         setLastUpdated(hj?.time || hj?.timestamp || null);
@@ -764,7 +789,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     setCopied(false);
     setChartsPayload(null);
     setShowDetails(false);
-    // ما بنمسح الرفع، لأنه بيدعم "datasetReady" — إلا إذا بدك
   }
 
   // ✅ Uploads report loader
@@ -787,9 +811,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   // ✅ Derived view model (only after runData exists)
   const consensus = runData?.consensus;
 
-  // ✅ القرار الذي سيظهر في UI (يعالج single-method alert => WATCH)
+  // ✅ القرار الذي سيظهر في UI
   const uiDecision = computeUiDecision(runData); // "info" | "watch" | "alert"
-  const decision = upper(uiDecision);            // "INFO" | "WATCH" | "ALERT"
+  const decision = upper(uiDecision); // "INFO" | "WATCH" | "ALERT"
 
   const theme = decisionTheme(decision);
   const decisionKey = theme.key;
@@ -803,13 +827,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const confidenceKey = computeConfidence(runData?.meta || runData?.meta?.meta || runData?.meta);
 
   const trendLabel =
-    trendKey === "up"
-      ? t.trendUp
-      : trendKey === "down"
-      ? t.trendDown
-      : trendKey === "flat"
-      ? t.trendFlat
-      : t.trendNoData;
+    trendKey === "up" ? t.trendUp : trendKey === "down" ? t.trendDown : trendKey === "flat" ? t.trendFlat : t.trendNoData;
 
   const confLabel = confidenceKey === "high" ? t.confHigh : confidenceKey === "med" ? t.confMed : t.confLow;
 
@@ -857,8 +875,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     }
     if (uiDecision === "watch") {
       return lang === "ar"
-        ? "إشارة تستدعي المراقبة: هناك إنذار من طريقة واحدة على الأقل. يُنصح بالمتابعة القريبة خلال الأسابيع القادمة ومقارنة النطاق عند توفر بيانات أكثر."
-        : "Monitoring signal: at least one method triggered an alert. Follow closely over the coming weeks and compare scope as more data arrive.";
+        ? "إشارة تستدعي المراقبة: يوجد تنبيه من طريقة واحدة أو أكثر. يُنصح بالمتابعة القريبة خلال الأسابيع القادمة ومقارنة النطاق عند توفر بيانات أكثر."
+        : "Monitoring signal: one or more methods triggered an alert. Follow closely over the coming weeks and compare scope as more data arrive.";
     }
     return lang === "ar"
       ? "لا يوجد إجراء عاجل. الاستمرار في الرصد ورفع العينة لتحسين الثقة."
@@ -917,7 +935,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           {/* ✅ Reports button here */}
           <div className="actions" style={{ alignSelf: "end" }}>
             <button type="button" className="ghostBtn" onClick={loadUploadsReport} disabled={reportLoading}>
-              {reportLoading ? "..." : (lang === "ar" ? "تقرير الرفعات" : "Uploads Report")}
+              {reportLoading ? "..." : lang === "ar" ? "تقرير الرفعات" : "Uploads Report"}
             </button>
           </div>
         </div>
@@ -1016,7 +1034,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             <div className="muted" style={{ marginTop: 8 }}>
               {lang === "ar" ? "Preset الحالي" : "Current preset"}: <span className="tinyPill">{presetLabel}</span> •{" "}
               {lang === "ar" ? "متقدمة" : "Advanced"}:{" "}
-              <span className="tinyPill">{advanced ? (lang === "ar" ? "نعم" : "Yes") : (lang === "ar" ? "لا" : "No")}</span>
+              <span className="tinyPill">{advanced ? (lang === "ar" ? "نعم" : "Yes") : lang === "ar" ? "لا" : "No"}</span>
             </div>
           </div>
         </div>
@@ -1061,7 +1079,15 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 marginTop: 10,
               }}
             >
-              <div className="advCard" style={{ borderRadius: 14, padding: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)" }}>
+              <div
+                className="advCard"
+                style={{
+                  borderRadius: 14,
+                  padding: 10,
+                  background: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(255,255,255,0.10)",
+                }}
+              >
                 <div className="advCardTitle" style={{ fontWeight: 950, marginBottom: 8 }}>
                   {t.ewmaBlock}
                 </div>
@@ -1094,7 +1120,15 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 />
               </div>
 
-              <div className="advCard" style={{ borderRadius: 14, padding: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)" }}>
+              <div
+                className="advCard"
+                style={{
+                  borderRadius: 14,
+                  padding: 10,
+                  background: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(255,255,255,0.10)",
+                }}
+              >
                 <div className="advCardTitle" style={{ fontWeight: 950, marginBottom: 8 }}>
                   {t.cusumBlock}
                 </div>
@@ -1127,7 +1161,15 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 />
               </div>
 
-              <div className="advCard" style={{ borderRadius: 14, padding: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)" }}>
+              <div
+                className="advCard"
+                style={{
+                  borderRadius: 14,
+                  padding: 10,
+                  background: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(255,255,255,0.10)",
+                }}
+              >
                 <div className="advCardTitle" style={{ fontWeight: 950, marginBottom: 8 }}>
                   {t.farringtonBlock}
                 </div>
@@ -1165,7 +1207,11 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               <button type="button" className={`chipBtn ${methods.cusum ? "chipBtnOn" : ""}`} onClick={() => toggleMethod("cusum")}>
                 CUSUM
               </button>
-              <button type="button" className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""}`} onClick={() => toggleMethod("farrington")}>
+              <button
+                type="button"
+                className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""}`}
+                onClick={() => toggleMethod("farrington")}
+              >
                 Farrington
               </button>
             </div>
@@ -1379,11 +1425,20 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                     <div className="stratGrid">
                       <StratCard title={t.bySex} items={profile?.bySex || []} getKey={(it) => keyLabelSex(it?.sex)} t={t} />
                       <StratCard title={t.byAge} items={profile?.byAge || []} getKey={(it) => safeLabel(it?.ageBand)} t={t} />
-                      <StratCard title={t.byNationality} items={profile?.byNationality || []} getKey={(it) => safeLabel(it?.nationality)} t={t} />
+                      <StratCard
+                        title={t.byNationality}
+                        items={profile?.byNationality || []}
+                        getKey={(it) => safeLabel(it?.nationality)}
+                        t={t}
+                      />
                     </div>
 
                     {insightText ? (
-                      <div className="reportBox2" style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }} dir={isRTL ? "rtl" : "ltr"}>
+                      <div
+                        className="reportBox2"
+                        style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }}
+                        dir={isRTL ? "rtl" : "ltr"}
+                      >
                         {insightText}
                       </div>
                     ) : null}
@@ -1397,7 +1452,11 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   <div className="cardTitle">{t.narrative}</div>
                 </div>
 
-                <div className="reportBox2" dir={isRTL ? "rtl" : "ltr"} style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: 12, borderRadius: 12, minHeight: 180 }}>
+                <div
+                  className="reportBox2"
+                  dir={isRTL ? "rtl" : "ltr"}
+                  style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: 12, borderRadius: 12, minHeight: 180 }}
+                >
                   {reportText || t.empty}
                 </div>
 
@@ -1416,9 +1475,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               <div>
                 <div className="modalTitle">{lang === "ar" ? "تقرير الرفعات" : "Uploads Report"}</div>
                 <div className="muted" style={{ marginTop: 6 }}>
-                  {lang === "ar"
-                    ? "ملخص الملفات والمرافق والمناطق وعدد الفحوصات حسب كل فحص."
-                    : "Summary of uploads, facilities, regions, and counts per test."}
+                  {lang === "ar" ? "ملخص الملفات والمرافق والمناطق وعدد الفحوصات حسب كل فحص." : "Summary of uploads, facilities, regions, and counts per test."}
                 </div>
               </div>
               <button className="ghostBtn" onClick={() => setReportOpen(false)}>
@@ -1429,9 +1486,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             <div className="modalBody">
               {reportErr ? <div className="muted">{reportErr}</div> : null}
 
-              {!reportErr && !reportData ? (
-                <div className="muted">{lang === "ar" ? "لا توجد بيانات." : "No data."}</div>
-              ) : null}
+              {!reportErr && !reportData ? <div className="muted">{lang === "ar" ? "لا توجد بيانات." : "No data."}</div> : null}
 
               {reportData?.totals ? (
                 <div className="mini" style={{ marginBottom: 12 }}>
@@ -1456,7 +1511,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
               {Array.isArray(reportData?.byTest) && reportData.byTest.length ? (
                 <>
-                  <div className="cardTitle" style={{ marginBottom: 8 }}>{lang === "ar" ? "حسب الفحص" : "By test"}</div>
+                  <div className="cardTitle" style={{ marginBottom: 8 }}>
+                    {lang === "ar" ? "حسب الفحص" : "By test"}
+                  </div>
                   <table className="table">
                     <thead>
                       <tr>
@@ -1480,7 +1537,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
               {Array.isArray(reportData?.facilities) && reportData.facilities.length ? (
                 <>
-                  <div className="cardTitle" style={{ marginBottom: 8 }}>{lang === "ar" ? "المرافق" : "Facilities"}</div>
+                  <div className="cardTitle" style={{ marginBottom: 8 }}>
+                    {lang === "ar" ? "المرافق" : "Facilities"}
+                  </div>
                   <table className="table">
                     <thead>
                       <tr>
@@ -1506,7 +1565,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
               {Array.isArray(reportData?.regions) && reportData.regions.length ? (
                 <>
-                  <div className="cardTitle" style={{ marginBottom: 8 }}>{lang === "ar" ? "المناطق" : "Regions"}</div>
+                  <div className="cardTitle" style={{ marginBottom: 8 }}>
+                    {lang === "ar" ? "المناطق" : "Regions"}
+                  </div>
                   <table className="table">
                     <thead>
                       <tr>
