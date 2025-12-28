@@ -1,3 +1,5 @@
+// apps/pulse-api/src/routes/analytics.routes.js
+
 const express = require("express");
 const LabResult = require("../models/LabResult");
 
@@ -11,19 +13,15 @@ const { buildReport } = require("../services/analytics/report.service");
 const { buildConsensus, buildSignatureInsight } = require("../services/analytics/consensus.service");
 const { scanRowsQuality } = require("../services/quality/dataQualityScan.service");
 
-
 const { apiOk, apiError } = require("../utils/response");
 const ANALYTICS_DEFAULTS = require("../config/analytics.defaults");
 
 // ✅ NEW: ML-assisted explanation report generator (does NOT replace stats)
 let generateExplanationReport = null;
 try {
-  // Put the service here:
   // apps/pulse-api/src/services/reports/explainReport/explainReport.service.js
   ({ generateExplanationReport } = require("../services/reports/explainReport/explainReport.service"));
 } catch (e) {
-  // Do not break the whole API if the new file isn't added yet.
-  // We'll fall back to legacy narrative report.
   generateExplanationReport = null;
 }
 
@@ -485,8 +483,7 @@ router.get("/anemia-profile", async (req, res) => {
 
     const dateFilter = getDateRangeFilter(req);
     const { rows, dateRange, rawCount } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
-const dataQualityScan = scanRowsQuality({ rows, rawCount });
-
+    const dataQualityScan = scanRowsQuality({ rows, rawCount });
 
     const out =
       signal === "anemia"
@@ -510,7 +507,7 @@ const dataQualityScan = scanRowsQuality({ rows, rawCount });
         data: {
           ...(out || {}),
           dateRange,
-          meta: { overallN: out?.profile?.overall?.n ?? 0 },
+          meta: { overallN: out?.profile?.overall?.n ?? 0, dataQualityScan },
         },
       })
     );
@@ -545,7 +542,9 @@ router.get("/run", async (req, res) => {
       return res.status(400).json(apiError({ status: 400, error: "methods is required" }));
     }
 
-    const { rows, dateRange } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
+    // ✅ FIX: include rawCount + compute dataQualityScan
+    const { rows, dateRange, rawCount } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
+    const dataQualityScan = scanRowsQuality({ rows, rawCount });
 
     const results = {};
     const interpretations = {};
@@ -658,8 +657,7 @@ router.get("/run", async (req, res) => {
 
     if (notEnoughData && String(consensus?.decision || "").toLowerCase() === "alert") {
       consensus.decision = "watch";
-      const noteAr2 =
-        "ملاحظة جودة: تم تخفيض القرار من ALERT إلى WATCH لأن البيانات غير كافية لإنذار موثوق.";
+      const noteAr2 = "ملاحظة جودة: تم تخفيض القرار من ALERT إلى WATCH لأن البيانات غير كافية لإنذار موثوق.";
       const noteEn2 =
         "Data quality note: Decision was downgraded from ALERT to WATCH due to insufficient data for a reliable alert.";
       if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr2;
@@ -691,7 +689,6 @@ router.get("/run", async (req, res) => {
           profile,
           profileInsight,
           meta: { dataQuality, dataQualityScan, dateRange },
-
         },
       })
     );
@@ -729,8 +726,7 @@ router.get("/report", async (req, res) => {
     }
 
     const { rows, dateRange, rawCount } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
-const dataQualityScan = scanRowsQuality({ rows, rawCount });
-
+    const dataQualityScan = scanRowsQuality({ rows, rawCount });
 
     const results = {};
     const interpretationsForConsensus = {};
@@ -911,7 +907,6 @@ const dataQualityScan = scanRowsQuality({ rows, rawCount });
             report: reportText,
             ...(translations ? { translations } : {}),
             meta: { dataQuality, dataQualityScan, dateRange, consensus },
-
           },
           interpretation: null,
         })
@@ -984,7 +979,8 @@ const dataQualityScan = scanRowsQuality({ rows, rawCount });
         data: {
           report: reportText,
           ...(translations ? { translations } : {}),
-          meta: { dataQuality, dateRange, consensus },
+          // ✅ FIX: include dataQualityScan in ML response too
+          meta: { dataQuality, dataQualityScan, dateRange, consensus },
         },
         interpretation: null,
       })
