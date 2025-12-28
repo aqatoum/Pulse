@@ -697,6 +697,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       const runParams = new URLSearchParams(scopeParams);
       runParams.set("signal", derivedSignal);
       runParams.set("methods", m.join(","));
+      runParams.set("testCode", String(testCode));
       runParams.set("lang", "both");
 
       const runJ = await fetchJSON(`${apiBase}/api/analytics/run?${runParams.toString()}`, controller.signal);
