@@ -1,5 +1,3 @@
-// apps/pulse-api/src/routes/analytics.routes.js
-
 const express = require("express");
 const LabResult = require("../models/LabResult");
 
@@ -16,10 +14,9 @@ const { scanRowsQuality } = require("../services/quality/dataQualityScan.service
 const { apiOk, apiError } = require("../utils/response");
 const ANALYTICS_DEFAULTS = require("../config/analytics.defaults");
 
-// ✅ NEW: ML-assisted explanation report generator (does NOT replace stats)
+// ✅ ML-assisted explanation report generator (template-based, does NOT replace stats)
 let generateExplanationReport = null;
 try {
-  // apps/pulse-api/src/services/reports/explainReport/explainReport.service.js
   ({ generateExplanationReport } = require("../services/reports/explainReport/explainReport.service"));
 } catch (e) {
   generateExplanationReport = null;
@@ -102,6 +99,18 @@ function normCode(x) {
 }
 
 /* ===============================
+   ✅ Default testCode per signal
+   =============================== */
+function defaultTestCodeForSignal(signal) {
+  const s = String(signal || "").trim().toLowerCase();
+  if (s === "wbc") return "WBC";
+  if (s === "crp") return "CRP";
+  if (s === "plt") return "PLT";
+  // anemia default
+  return "HB";
+}
+
+/* ===============================
    Scope (GLOBAL / facility / region / lab)
    =============================== */
 function getScope(req) {
@@ -109,7 +118,6 @@ function getScope(req) {
   const regionId = String(req.query.regionId || "").trim();
   const labId = String(req.query.labId || "").trim();
 
-  // ✅ GLOBAL allowed
   if (!facilityId && !regionId && !labId) {
     return {
       ok: true,
@@ -179,6 +187,19 @@ function humanScopeLabel(scope, lang) {
 
   const x = scope?.scopeId || "—";
   return isAr ? `النطاق: ${x}` : `Scope: ${x}`;
+}
+
+/* ===============================
+   Signal Labels (EN/AR) for report title
+   =============================== */
+function signalLabelFor(signalType, lang) {
+  const s = String(signalType || "").toLowerCase();
+  const isAr = String(lang || "en").toLowerCase() === "ar";
+
+  if (s === "wbc") return isAr ? "إشارة كريات الدم البيضاء (WBC)" : "White blood cells (WBC) signal";
+  if (s === "crp") return isAr ? "إشارة الالتهاب (CRP)" : "Inflammation (CRP) signal";
+  if (s === "plt") return isAr ? "إشارة الصفائح الدموية (PLT)" : "Platelets (PLT) signal";
+  return isAr ? "إشارة فقر الدم (HB)" : "Anemia (HB) signal";
 }
 
 /* ===============================
@@ -363,7 +384,7 @@ function withScopeTop(scopeRes) {
       regionId: scopeRes.scope.regionId || null,
       facilityId: scopeRes.scope.facilityId || null,
     },
-    // ⛔ keep for backward compat; UI shouldn't print this directly
+    // keep for backward compat
     facilityId: scopeRes.scope.scopeId,
   };
 }
@@ -373,12 +394,13 @@ function withScopeTop(scopeRes) {
    =============================== */
 async function loadSignalRows({ scope, dateFilter, testCode }) {
   const tc = normCode(testCode);
-  if (!tc)
+  if (!tc) {
     return {
       rows: [],
       dateRange: { start: null, end: null, filtered: dateFilter?.forMeta || {} },
       rawCount: 0,
     };
+  }
 
   const q = {
     ...buildBaseQuery(scope),
@@ -479,10 +501,13 @@ router.get("/anemia-profile", async (req, res) => {
 
     const lang = normalizeLang(req.query.lang, "both");
     const signal = String(req.query.signal || "anemia").trim().toLowerCase();
-    const testCode = normCode(req.query.testCode || (signal === "anemia" ? "HB" : ""));
+
+    // ✅ accept testCode or infer
+    const testCode = normCode(req.query.testCode || defaultTestCodeForSignal(signal));
 
     const dateFilter = getDateRangeFilter(req);
     const { rows, dateRange, rawCount } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
+
     const dataQualityScan = scanRowsQuality({ rows, rawCount });
 
     const out =
@@ -527,7 +552,10 @@ router.get("/run", async (req, res) => {
 
     const lang = normalizeLang(req.query.lang, "both");
     const signal = String(req.query.signal || "anemia").trim().toLowerCase();
-    const testCode = normCode(req.query.testCode || (signal === "anemia" ? "HB" : ""));
+
+    // ✅ CRITICAL FIX:
+    // Always have a testCode: either query or inferred from signal
+    const testCode = normCode(req.query.testCode || defaultTestCodeForSignal(signal));
 
     const params = getAnemiaParams(req);
     const dateFilter = getDateRangeFilter(req);
@@ -542,7 +570,6 @@ router.get("/run", async (req, res) => {
       return res.status(400).json(apiError({ status: 400, error: "methods is required" }));
     }
 
-    // ✅ FIX: include rawCount + compute dataQualityScan
     const { rows, dateRange, rawCount } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
     const dataQualityScan = scanRowsQuality({ rows, rawCount });
 
@@ -658,8 +685,7 @@ router.get("/run", async (req, res) => {
     if (notEnoughData && String(consensus?.decision || "").toLowerCase() === "alert") {
       consensus.decision = "watch";
       const noteAr2 = "ملاحظة جودة: تم تخفيض القرار من ALERT إلى WATCH لأن البيانات غير كافية لإنذار موثوق.";
-      const noteEn2 =
-        "Data quality note: Decision was downgraded from ALERT to WATCH due to insufficient data for a reliable alert.";
+      const noteEn2 = "Data quality note: Decision was downgraded from ALERT to WATCH due to insufficient data for a reliable alert.";
       if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr2;
       if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn2;
     }
@@ -700,8 +726,8 @@ router.get("/run", async (req, res) => {
 
 /* ===============================
    REPORT — /api/analytics/report
-   ✅ NEW: default = ML explanation report
-   ✅ Backward-compatible: reportType=narrative returns old buildReport
+   default = ML explanation report (template-based)
+   Backward-compatible: reportType=narrative returns old buildReport
    =============================== */
 router.get("/report", async (req, res) => {
   try {
@@ -710,7 +736,9 @@ router.get("/report", async (req, res) => {
 
     const lang = normalizeLang(req.query.lang, "both");
     const signal = String(req.query.signal || "anemia").trim().toLowerCase();
-    const testCode = normCode(req.query.testCode || (signal === "anemia" ? "HB" : ""));
+
+    // ✅ Always infer testCode if not provided
+    const testCode = normCode(req.query.testCode || defaultTestCodeForSignal(signal));
 
     const params = getAnemiaParams(req);
     const dateFilter = getDateRangeFilter(req);
@@ -842,17 +870,15 @@ router.get("/report", async (req, res) => {
       if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn2;
     }
 
-    // ✅ Friendly scope label
     const scopeLabelAr = humanScopeLabel(scopeRes.scope, "ar");
     const scopeLabelEn = humanScopeLabel(scopeRes.scope, "en");
 
     // ✅ Choose report type WITHOUT breaking old one
-    // default is ML if available
     const reportTypeRaw = String(req.query.reportType || "ml").toLowerCase();
     const wantNarrative = reportTypeRaw === "narrative" || reportTypeRaw === "legacy" || reportTypeRaw === "old";
 
     // ==========================================================
-    // ✅ Option 1: Legacy narrative report (old behavior)
+    // ✅ Option 1: Legacy narrative report
     // ==========================================================
     if (wantNarrative || !generateExplanationReport) {
       const scopeLabelForReport = lang === "ar" ? scopeLabelAr : scopeLabelEn;
@@ -868,7 +894,6 @@ router.get("/report", async (req, res) => {
         lang,
         weeksCount: dataQuality.weeksCoverage,
         baselineStd: results?.ewma?.baselineStd ?? null,
-
         scopeLabel: scopeLabelForReport,
         scopeType: scopeRes.scope.scopeType,
         scopeId: scopeRes.scope.scopeId,
@@ -914,24 +939,37 @@ router.get("/report", async (req, res) => {
     }
 
     // ==========================================================
-    // ✅ Option 2: ML-assisted explanation report (NEW default)
+    // ✅ Option 2: Explanation report (NEW default, generalized)
     // ==========================================================
+    const pickRange = () => {
+      const fStart = dateRange?.filtered?.start;
+      const fEnd = dateRange?.filtered?.end;
+      const start = fStart || dateRange?.start || "—";
+      const end = fEnd || dateRange?.end || "—";
+      return { start: start || "—", end: end || "—" };
+    };
+
     const makeML = (oneLang) => {
       const isAr = String(oneLang).toLowerCase() === "ar";
       const scopeLabel = isAr ? scopeLabelAr : scopeLabelEn;
 
-      const start = dateRange?.filtered?.start || "—";
-      const end = dateRange?.filtered?.end || "—";
+      const { start, end } = pickRange();
       const timeRange = isAr ? `${start} إلى ${end}` : `${start} to ${end}`;
 
       return generateExplanationReport({
         lang: oneLang,
-        signalLabel: isAr ? "إشارة فقر الدم" : "Anemia signal",
+        signalType: signal,
+        testCode,
+        signalLabel: signalLabelFor(signal, oneLang),
         facilityId: scopeLabel,
         timeRange,
+        aggregation: "Weekly",
+        methodsUsed: methods,
+        consensus,
         ewma: results.ewma || null,
         cusum: results.cusum || null,
-        profile: { profile }, // keep shape stable
+        farrington: results.farrington || null,
+        dataQuality,
       });
     };
 
@@ -948,7 +986,6 @@ router.get("/report", async (req, res) => {
       reportText = String(out?.reportText || "");
     }
 
-    // ✅ guarantee non-empty
     if (!reportText.trim()) {
       reportText = lang === "ar" ? "لا تتوفر بيانات كافية لإنشاء تقرير." : "Insufficient data to generate a report.";
     }
@@ -979,7 +1016,6 @@ router.get("/report", async (req, res) => {
         data: {
           report: reportText,
           ...(translations ? { translations } : {}),
-          // ✅ FIX: include dataQualityScan in ML response too
           meta: { dataQuality, dataQualityScan, dateRange, consensus },
         },
         interpretation: null,
