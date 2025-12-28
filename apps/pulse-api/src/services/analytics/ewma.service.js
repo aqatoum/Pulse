@@ -15,7 +15,7 @@ function pickBand(bands, ageYears) {
   return (bands || []).find((b) => a >= b.min && a <= b.max) || null;
 }
 
-// Hb anemia rule (legacy fallback)
+// Hb anemia rule (kept)
 function anemiaThresholdHb(ageYears, sex) {
   const age = typeof ageYears === "number" && Number.isFinite(ageYears) ? ageYears : null;
   const s = String(sex || "U").toUpperCase();
@@ -28,49 +28,22 @@ function anemiaThresholdHb(ageYears, sex) {
   return 11.0;
 }
 
-// NEW: allow HB thresholds from CLINICAL if present (mode ageSex)
-function anemiaThresholdFromClinical(cfg, ageYears, sex) {
-  if (!cfg || cfg.mode !== "ageSex" || !cfg.thresholds) return null;
-
-  const age = typeof ageYears === "number" ? ageYears : Number(ageYears);
-  const s = String(sex || "U").toUpperCase();
-
-  // use WHO-aligned keys (simplified)
-  if (Number.isFinite(age)) {
-    if (age < 5) return Number(cfg.thresholds.child_under_5);
-    if (age >= 5 && age <= 11) return Number(cfg.thresholds.child_5_11);
-    if (age >= 12 && age <= 14) return Number(cfg.thresholds.adolescent_12_14);
-    if (age >= 15) {
-      if (s === "F") return Number(cfg.thresholds.adult_female);
-      if (s === "M") return Number(cfg.thresholds.adult_male);
-      // if unknown sex, be conservative:
-      return Number(cfg.thresholds.adolescent_12_14 ?? cfg.thresholds.child_5_11);
-    }
-  }
-
-  return null;
-}
-
 function buildCaseDef({ signalType, testCode }) {
   const st = String(signalType || "").toLowerCase();
   const tc = normCode(testCode);
 
-  // ✅ Prefer CLINICAL definition if exists (including HB via mode ageSex)
-  const cfg = CLINICAL?.[tc] || null;
-
-  // HB / anemia
+  // anemia / Hb special-case
   if (st === "anemia" || tc === "HB" || tc === "HGB") {
     return {
       direction: "low",
       isCase: (value, row) => {
-        const thrFromCfg = anemiaThresholdFromClinical(cfg, row?.ageYears, row?.sex);
-        const thr = Number.isFinite(thrFromCfg) ? thrFromCfg : anemiaThresholdHb(row?.ageYears, row?.sex);
+        const thr = anemiaThresholdHb(row?.ageYears, row?.sex);
         return value < thr;
       },
     };
   }
 
-  // Other tests must have config
+  const cfg = CLINICAL?.[tc] || null;
   if (!cfg) return null;
 
   const dir = String(cfg.direction || "high").toLowerCase() === "low" ? "low" : "high";
@@ -78,16 +51,13 @@ function buildCaseDef({ signalType, testCode }) {
   return {
     direction: dir,
     isCase: (value, row) => {
-      // If cfg has bands, use banded thresholds
       const band = pickBand(cfg.bands, row?.ageYears);
       if (!band) return false;
-
       if (dir === "high") {
         const u = typeof band.upper === "number" ? band.upper : null;
         if (u == null) return false;
         return value > u;
       }
-
       const l = typeof band.lower === "number" ? band.lower : null;
       if (l == null) return false;
       return value < l;
@@ -108,32 +78,12 @@ function safeNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-/**
- * ✅ Universal value extractor:
- * 1) row.value
- * 2) legacy hb/hgb
- * 3) smart fallback: column named by testCode (wbc/crp/plt/...)
- */
-function extractValue(row, testCode) {
+function extractValue(row) {
+  // prefer universal value, fallback to legacy hb
   const v = safeNum(row?.value);
   if (v != null) return v;
-
   const hb = safeNum(row?.hb);
   if (hb != null) return hb;
-
-  const hgb = safeNum(row?.hgb);
-  if (hgb != null) return hgb;
-
-  const tc = normCode(testCode);
-  if (tc) {
-    const k1 = tc.toLowerCase();
-    const directLower = safeNum(row?.[k1]);
-    if (directLower != null) return directLower;
-
-    const directUpper = safeNum(row?.[tc]);
-    if (directUpper != null) return directUpper;
-  }
-
   return null;
 }
 
@@ -151,7 +101,7 @@ function std(arr) {
 
 /**
  * ✅ Generic EWMA over weekly CASE rate.
- * rows must contain: { testDate|collectedAt, value|<testCode column>, ageYears, sex, testCode? }
+ * rows must contain: { testDate, value (or hb), ageYears, sex, testCode? }
  */
 function computeSignalEwma({
   rows,
@@ -164,9 +114,7 @@ function computeSignalEwma({
   preset = "standard",
   timeRange = null,
 }) {
-  const tcNorm = normCode(testCode);
-
-  const caseDef = buildCaseDef({ signalType, testCode: tcNorm });
+  const caseDef = buildCaseDef({ signalType, testCode });
   if (!caseDef) {
     return {
       ewma: {
@@ -178,7 +126,7 @@ function computeSignalEwma({
         sigmaZ: null,
         UCL: null,
         direction: null,
-        testCode: tcNorm,
+        testCode: normCode(testCode),
         points: [],
       },
       interpretation:
@@ -196,11 +144,11 @@ function computeSignalEwma({
     const dt = r?.testDate || r?.collectedAt;
     if (!dt) continue;
 
-    // enforce testCode if present in row (universal schema)
+    // enforce testCode if present in row
     const rowCode = r?.testCode ? normCode(r.testCode) : null;
-    if (rowCode && tcNorm && rowCode !== tcNorm) continue;
+    if (rowCode && normCode(testCode) && rowCode !== normCode(testCode)) continue;
 
-    const v = extractValue(r, tcNorm);
+    const v = extractValue(r);
     if (v == null) continue;
 
     const wk = getWeekKey(dt);
@@ -212,11 +160,9 @@ function computeSignalEwma({
   }
 
   const weeks = Array.from(byWeek.keys()).sort();
-
   const points = weeks.map((wk) => {
     const g = byWeek.get(wk);
     const rate = g.n > 0 ? g.cases / g.n : 0;
-
     return {
       week: wk,
       n: g.n,
@@ -243,7 +189,6 @@ function computeSignalEwma({
     if (idx === 0) z = baselineMean;
     z = lambda * p.rate + (1 - lambda) * z;
     const alert = sigmaZ > 0 ? z > UCL : false;
-
     return {
       week: p.week,
       n: p.n,
@@ -260,13 +205,17 @@ function computeSignalEwma({
 
   const interpEn =
     !outPoints.length
-      ? `No data available for ${tcNorm}.`
-      : `EWMA tracked weekly ${caseDef.direction.toUpperCase()}-case rate for ${tcNorm}. Latest week ${last.week} has ${last.n} tests; alert=${last.alert ? "YES" : "NO"}.`;
+      ? `No data available for ${normCode(testCode)}.`
+      : `EWMA tracked weekly ${caseDef.direction.toUpperCase()}-case rate for ${normCode(
+          testCode
+        )}. Latest week ${last.week} has ${last.n} tests; alert=${last.alert ? "YES" : "NO"}.`;
 
   const interpAr =
     !outPoints.length
-      ? `لا توجد بيانات للفحص ${tcNorm}.`
-      : `تم تتبع EWMA لمعدل الحالات (${caseDef.direction === "high" ? "مرتفع" : "منخفض"}) أسبوعيًا للفحص ${tcNorm}. آخر أسبوع ${last.week} عدد الفحوصات ${last.n}؛ إنذار=${last.alert ? "نعم" : "لا"}.`;
+      ? `لا توجد بيانات للفحص ${normCode(testCode)}.`
+      : `تم تتبع EWMA لمعدل الحالات (${caseDef.direction === "high" ? "مرتفع" : "منخفض"}) أسبوعيًا للفحص ${normCode(
+          testCode
+        )}. آخر أسبوع ${last.week} عدد الفحوصات ${last.n}؛ إنذار=${last.alert ? "نعم" : "لا"}.`;
 
   return {
     ewma: {
@@ -278,10 +227,11 @@ function computeSignalEwma({
       sigmaZ: Number((sigmaZ ?? 0).toFixed(4)),
       UCL: Number((UCL ?? 0).toFixed(4)),
       direction: caseDef.direction,
-      testCode: tcNorm,
+      testCode: normCode(testCode),
       points: outPoints,
     },
-    interpretation: lang === "both" ? { ar: interpAr, en: interpEn } : lang === "ar" ? interpAr : interpEn,
+    interpretation:
+      lang === "both" ? { ar: interpAr, en: interpEn } : lang === "ar" ? interpAr : interpEn,
   };
 }
 
