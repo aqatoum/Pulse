@@ -1,36 +1,73 @@
 // src/config/clinical.thresholds.js
-module.exports = {
-  // Units assumed:
-  // WBC: x10^9/L  (same as K/uL numerically)
-  // PLT: x10^9/L  (same as K/uL numerically)
-  // CRP: mg/L
+// Global default clinical thresholds for POPULATION SURVEILLANCE.
+// NOT for individual diagnosis.
+// Reference ranges vary by lab; calibrate locally when possible.
 
+module.exports = {
+  /**
+   * HB / HGB — Anemia (WHO-aligned)
+   * Direction: LOW
+   *
+   * WHO thresholds (simplified):
+   * - Children 6–59 months: <11.0 g/dL
+   * - Children 5–11 years: <11.5 g/dL
+   * - Adolescents 12–14 years: <12.0 g/dL
+   * - Adult women: <12.0 g/dL
+   * - Adult men: <13.0 g/dL
+   */
+  HB: {
+    unit: "g/dL",
+    direction: "low",
+    mode: "ageSex", // tells analytics to use age+sex logic
+    thresholds: {
+      child_under_5: 11.0,
+      child_5_11: 11.5,
+      adolescent_12_14: 12.0,
+      adult_female: 12.0,
+      adult_male: 13.0,
+    },
+  },
+
+  /**
+   * WBC — Leukocytosis
+   * Direction: HIGH
+   */
   WBC: {
     unit: "x10^9/L",
     direction: "high",
     bands: [
-      { min: 0, max: 4, upper: 17.5 },   // broadly aligns with young children ranges :contentReference[oaicite:4]{index=4}
-      { min: 5, max: 14, upper: 14.5 },  // 6–9 upper 14.5, 10–17 upper 13.5 :contentReference[oaicite:5]{index=5}
-      { min: 15, max: 64, upper: 11.0 }, // adult upper ~11 :contentReference[oaicite:6]{index=6}
-      { min: 65, max: 200, upper: 11.0 },
+      { min: 0, max: 0.08, upper: 30.0 },
+      { min: 0.09, max: 0.25, upper: 19.5 },
+      { min: 0.26, max: 1.0, upper: 17.5 },
+      { min: 1.01, max: 2.0, upper: 17.0 },
+      { min: 2.01, max: 4.99, upper: 15.5 },
+      { min: 5.0, max: 11.99, upper: 14.5 },
+      { min: 12.0, max: 18.0, upper: 13.0 },
+      { min: 18.01, max: 200, upper: 11.0 },
     ],
   },
 
+  /**
+   * PLT — Thrombocytopenia
+   * Direction: LOW
+   */
   PLT: {
     unit: "x10^9/L",
     direction: "low",
     bands: [
-      { min: 0, max: 4, lower: 170 },    // conservative for infants/toddlers :contentReference[oaicite:7]{index=7}
-      { min: 5, max: 14, lower: 155 },   // 8–12 lower 155 :contentReference[oaicite:8]{index=8}
-      { min: 15, max: 200, lower: 140 }, // 12+ adult lower 140 :contentReference[oaicite:9]{index=9}
+      { min: 0, max: 200, lower: 150 },
     ],
   },
 
+  /**
+   * CRP — Inflammation
+   * Direction: HIGH
+   */
   CRP: {
     unit: "mg/L",
     direction: "high",
     bands: [
-      { min: 0, max: 200, upper: 10 },   // common clinical cutpoint 8–10 mg/L :contentReference[oaicite:10]{index=10}
+      { min: 0, max: 200, upper: 10 },
     ],
   },
 };

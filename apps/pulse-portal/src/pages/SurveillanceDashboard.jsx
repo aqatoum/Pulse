@@ -3,19 +3,17 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import DecisionCard from "../components/DecisionCard.jsx";
 import SimpleSeriesChart from "../components/SimpleSeriesChart.jsx";
 import UploadCsv from "../components/UploadCsv.jsx";
+import MethodStatusBanner from "../components/MethodStatusBanner.jsx";
 
 import {
   TXT,
   PRESETS,
-  BOUNDS,
   getScopeOptions,
   getTestOptions,
   getSignalForTest,
   getSignalLabel,
   upper,
   safeText,
-  clampNum,
-  clampInt,
   fmtPct,
   extractDateRange,
   extractReport,
@@ -31,26 +29,29 @@ import {
   adaptCUSUM,
   adaptFarrington,
   Dropdown,
-  ParamSlider,
 } from "./surveillance/index.js";
 
 /* =========================
-   ✅ Styles (Global-ish look)
+   ✅ Light Medical Theme (Blue)
    ========================= */
 const styles = `
   :root{
-    --bg: #0B1220;
-    --card: rgba(255,255,255,0.06);
-    --card2: rgba(0,0,0,0.22);
-    --stroke: rgba(255,255,255,0.10);
-    --stroke2: rgba(255,255,255,0.14);
-    --text: rgba(255,255,255,0.92);
-    --muted: rgba(255,255,255,0.70);
+    --bg: #F4F8FF;
+    --bg2: #EEF5FF;
+    --card: #FFFFFF;
+    --card2: rgba(11, 87, 208, 0.04);
+    --stroke: rgba(11, 87, 208, 0.12);
+    --stroke2: rgba(11, 87, 208, 0.16);
 
-    --info: #10B981;
+    --text: rgba(10, 20, 40, 0.92);
+    --muted: rgba(10, 20, 40, 0.70);
+
+    --info: #1D4ED8;
     --watch: #F59E0B;
     --alert: #EF4444;
-    --ink: rgba(0,0,0,0.88);
+
+    --ink: rgba(10, 20, 40, 0.92);
+    --shadow: 0 18px 40px rgba(11, 87, 208, 0.10);
   }
 
   .dash{
@@ -58,116 +59,212 @@ const styles = `
     padding: 18px;
     display: grid;
     gap: 14px;
-    background: radial-gradient(900px 600px at 15% 10%, rgba(16,185,129,0.10), transparent 55%),
-                radial-gradient(900px 600px at 85% 15%, rgba(245,158,11,0.10), transparent 55%),
-                radial-gradient(900px 600px at 70% 75%, rgba(239,68,68,0.08), transparent 55%),
-                var(--bg);
+    background:
+      radial-gradient(900px 600px at 10% 10%, rgba(29,78,216,0.12), transparent 55%),
+      radial-gradient(900px 600px at 80% 15%, rgba(59,130,246,0.10), transparent 55%),
+      linear-gradient(180deg, var(--bg), var(--bg2));
     color: var(--text);
   }
 
   .panel{
-    border-radius: 18px; padding: 16px;
+    border-radius: 18px;
+    padding: 16px;
     background: var(--card);
     border: 1px solid var(--stroke);
-    backdrop-filter: blur(10px);
+    box-shadow: var(--shadow);
   }
 
-  .panelHeader{ display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; margin-bottom: 12px; }
+  .panelHeader{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
   .titleWrap{ display:grid; gap: 6px; }
-  .panelTitle{ font-weight: 950; font-size: 20px; letter-spacing: .2px; }
-  .panelSub{ opacity: .86; font-size: 13px; line-height: 1.55; max-width: 980px; }
-  .panelHint{ opacity:.78; font-size: 12px; line-height: 1.55; max-width: 980px; }
+  .panelTitle{
+    font-weight: 950;
+    font-size: 20px;
+    letter-spacing: .2px;
+    color: var(--ink);
+  }
+  .panelSub{
+    opacity: .90;
+    font-size: 13px;
+    line-height: 1.6;
+    max-width: 980px;
+    color: var(--muted);
+  }
+  .panelHint{
+    opacity:.80;
+    font-size: 12px;
+    line-height: 1.6;
+    max-width: 980px;
+    color: var(--muted);
+  }
 
-  .infoGrid{ display:grid; grid-template-columns: 1.3fr 1fr; gap: 12px; margin-top: 10px; }
+  .infoGrid{
+    display:grid;
+    grid-template-columns: 1.3fr 1fr;
+    gap: 12px;
+    margin-top: 10px;
+  }
   .infoCard{
-    border-radius: 16px; padding: 14px;
-    background: rgba(0,0,0,0.16);
-    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 16px;
+    padding: 14px;
+    background: var(--card2);
+    border: 1px solid var(--stroke);
   }
-  .infoCardTitle{ font-weight: 950; margin-bottom: 6px; }
-  .infoCardBody{ opacity: .86; font-size: 13px; line-height: 1.7; }
+  .infoCardTitle{ font-weight: 950; margin-bottom: 6px; color: var(--ink); }
+  .infoCardBody{ opacity: .90; font-size: 13px; line-height: 1.7; color: var(--muted); }
 
-  .formRow{ display:grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin-bottom: 10px; }
-  .field label{ display:block; font-size: 12px; opacity:.85; margin-bottom: 6px; }
+  .formRow{
+    display:grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .field label{ display:block; font-size: 12px; opacity:.85; margin-bottom: 6px; color: var(--muted); }
   .field input{
-    width:100%; border-radius: 12px; border: 1px solid var(--stroke2);
-    background: var(--card2); color: var(--text);
-    padding: 10px 12px; outline:none;
+    width:100%;
+    border-radius: 12px;
+    border: 1px solid var(--stroke2);
+    background: #fff;
+    color: var(--ink);
+    padding: 10px 12px;
+    outline:none;
   }
-  .field input:focus{ border-color: rgba(255,255,255,0.28); box-shadow: 0 0 0 3px rgba(255,255,255,0.06); }
+  .field input:focus{
+    border-color: rgba(29,78,216,0.35);
+    box-shadow: 0 0 0 3px rgba(29,78,216,0.10);
+  }
 
-  .actions{ display:flex; gap: 10px; align-items:center; flex-wrap: wrap; justify-content: flex-end; }
-  .primaryBtn{
-    border:0; border-radius: 12px; padding: 10px 14px;
-    font-weight: 950; cursor:pointer;
-    background: rgba(255,255,255,0.92); color: var(--ink);
+  .actions{
+    display:flex;
+    gap: 10px;
+    align-items:center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
+
+  .primaryBtn{
+    border:0;
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-weight: 950;
+    cursor:pointer;
+    background: rgba(29,78,216,0.95);
+    color: white;
+    box-shadow: 0 10px 20px rgba(29,78,216,0.18);
+  }
+  .primaryBtn:hover{ filter: brightness(1.02); }
   .primaryBtn:disabled{ opacity:.6; cursor:not-allowed; }
+
   .ghostBtn{
-    border-radius: 12px; padding: 10px 14px; font-weight: 950; cursor:pointer;
-    background: rgba(255,255,255,0.08); color: var(--text);
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-weight: 950;
+    cursor:pointer;
+    background: rgba(29,78,216,0.06);
+    color: var(--ink);
     border: 1px solid var(--stroke2);
   }
+  .ghostBtn:hover{ border-color: rgba(29,78,216,0.28); }
   .ghostBtn:disabled{ opacity:.55; cursor:not-allowed; }
+
   .dangerBtn{
-    border-radius: 12px; padding: 10px 14px; font-weight: 950; cursor:pointer;
-    background: rgba(245, 158, 11, 0.14); color: var(--text);
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-weight: 950;
+    cursor:pointer;
+    background: rgba(245, 158, 11, 0.12);
+    color: rgba(10, 20, 40, 0.92);
     border: 1px solid rgba(245, 158, 11, 0.35);
   }
 
-  .miniGrid{ display:grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 10px; }
-  .mini{ border-radius: 14px; padding: 10px 12px; background: rgba(0,0,0,0.18); border: 1px solid rgba(255,255,255,0.10); }
-  .miniRow{ display:flex; justify-content:space-between; gap: 10px; font-size: 12px; line-height: 1.6; }
-  .miniKey{ opacity:.75; }
-  .miniVal{ font-weight: 900; opacity:.95; text-align: end; }
+  .miniGrid{
+    display:grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .mini{
+    border-radius: 14px;
+    padding: 10px 12px;
+    background: rgba(29,78,216,0.04);
+    border: 1px solid var(--stroke);
+  }
+  .miniRow{
+    display:flex;
+    justify-content:space-between;
+    gap: 10px;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .miniKey{ opacity:.78; color: var(--muted); }
+  .miniVal{ font-weight: 900; opacity:.95; text-align: end; color: var(--ink); }
 
   .grid{ display:grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
   .card{
-    border-radius: 18px; padding: 16px;
+    border-radius: 18px;
+    padding: 16px;
     background: var(--card);
     border: 1px solid var(--stroke);
+    box-shadow: var(--shadow);
   }
   .cardWide{ grid-column: 1 / -1; }
   .cardHeader{ display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom: 10px; }
-  .cardTitle{ font-weight: 950; letter-spacing: .2px; }
+  .cardTitle{ font-weight: 950; letter-spacing: .2px; color: var(--ink); }
 
-  .muted{ opacity:.85; font-size: 13px; line-height: 1.7; }
-  .reportBox2{ background: rgba(0,0,0,0.20); border: 1px solid rgba(255,255,255,0.12); color: var(--text); }
+  .muted{ opacity:.88; font-size: 13px; line-height: 1.75; color: var(--muted); }
 
   .tinyPill{
-    display:inline-flex; align-items:center; gap:6px;
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
     border-radius: 999px;
     padding: 6px 10px;
-    border: 1px solid rgba(255,255,255,0.14);
-    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--stroke);
+    background: rgba(29,78,216,0.06);
     font-weight: 900;
     font-size: 12px;
+    color: var(--ink);
   }
 
   .statusCard{
     border-radius: 20px;
     padding: 18px;
-    background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(0,0,0,0.22));
-    border: 1px solid rgba(255,255,255,0.12);
-    box-shadow: 0 14px 40px rgba(0,0,0,0.28);
+    background: #ffffff;
+    border: 1px solid var(--stroke);
+    box-shadow: var(--shadow);
     overflow:hidden;
     position: relative;
   }
   .statusGlow{
     position:absolute; inset: -80px;
     filter: blur(28px);
-    opacity: 0.9;
+    opacity: 0.85;
     pointer-events:none;
   }
-  .statusTop{ display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; position: relative; }
-  .statusTitle{ font-weight: 950; font-size: 16px; opacity: .95; }
+  .statusTop{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap: 12px;
+    position: relative;
+  }
+  .statusTitle{ font-weight: 950; font-size: 16px; opacity: .95; color: var(--ink); }
   .statusBadge{
-    display:inline-flex; align-items:center; gap: 8px;
+    display:inline-flex;
+    align-items:center;
+    gap: 8px;
     border-radius: 999px;
     padding: 8px 12px;
     font-weight: 950;
-    border: 1px solid rgba(255,255,255,0.14);
-    background: rgba(0,0,0,0.18);
+    border: 1px solid var(--stroke);
+    background: rgba(29,78,216,0.06);
+    color: var(--ink);
   }
   .statusMain{
     margin-top: 10px;
@@ -181,20 +278,23 @@ const styles = `
     font-weight: 950;
     letter-spacing: .2px;
     line-height: 1.1;
+    color: var(--ink);
   }
   .statusMeta{ display:grid; gap: 8px; }
   .kv{ display:flex; justify-content:space-between; gap: 10px; font-size: 13px; }
-  .k{ opacity: .78; }
-  .v{ font-weight: 900; opacity: .95; text-align:end; }
+  .k{ opacity: .78; color: var(--muted); }
+  .v{ font-weight: 900; opacity: .95; text-align:end; color: var(--ink); }
+
   .statusText{
     margin-top: 12px;
     border-radius: 14px;
     padding: 12px;
-    background: rgba(0,0,0,0.18);
-    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(29,78,216,0.04);
+    border: 1px solid var(--stroke);
     font-size: 13px;
-    line-height: 1.75;
+    line-height: 1.8;
     position: relative;
+    color: var(--ink);
   }
   .statusText b{ font-weight: 950; }
 
@@ -203,23 +303,23 @@ const styles = `
     padding: 10px 14px;
     font-weight: 950;
     cursor:pointer;
-    background: rgba(255,255,255,0.10);
-    color: var(--text);
-    border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(29,78,216,0.06);
+    color: var(--ink);
+    border: 1px solid var(--stroke2);
   }
-  .linkBtn:hover{ border-color: rgba(255,255,255,0.26); }
+  .linkBtn:hover{ border-color: rgba(29,78,216,0.28); }
 
   /* Stratification */
   .stratGrid{ display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
   .stratCard{
     border-radius: 16px;
     padding: 12px;
-    background: rgba(0,0,0,0.16);
-    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(29,78,216,0.04);
+    border: 1px solid var(--stroke);
     overflow:hidden;
   }
-  .stratTitle{ font-weight: 950; margin-bottom: 10px; display:flex; justify-content:space-between; gap: 10px; }
-  .stratMeta{ opacity:.80; font-size: 12px; }
+  .stratTitle{ font-weight: 950; margin-bottom: 10px; display:flex; justify-content:space-between; gap: 10px; color: var(--ink); }
+  .stratMeta{ opacity:.80; font-size: 12px; color: var(--muted); }
   .row{
     display:grid;
     grid-template-columns: 1.2fr .6fr .8fr;
@@ -227,29 +327,35 @@ const styles = `
     align-items:center;
     margin-bottom: 8px;
   }
-  .rowLabel{ font-weight: 900; opacity:.92; }
-  .rowCount{ opacity:.88; font-size: 12px; text-align:end; }
-  .rowPct{ font-weight: 950; text-align:end; }
+  .rowLabel{ font-weight: 900; opacity:.92; color: var(--ink); }
+  .rowCount{ opacity:.88; font-size: 12px; text-align:end; color: var(--muted); }
+  .rowPct{ font-weight: 950; text-align:end; color: var(--ink); }
   .bar{
     margin-top: 6px;
     height: 8px;
     border-radius: 999px;
-    background: rgba(255,255,255,0.08);
-    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(29,78,216,0.08);
+    border: 1px solid rgba(29,78,216,0.10);
     overflow:hidden;
   }
   .fill{
     height: 100%;
     border-radius: 999px;
-    background: linear-gradient(90deg, rgba(16,185,129,0.95), rgba(245,158,11,0.92), rgba(239,68,68,0.92));
+    background: linear-gradient(90deg, rgba(29,78,216,0.95), rgba(59,130,246,0.92));
+  }
+
+  .reportBox2{
+    background: rgba(29,78,216,0.04);
+    border: 1px solid var(--stroke);
+    color: var(--ink);
   }
 
   /* Modal */
   .modalOverlay{
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.55);
-    backdrop-filter: blur(6px);
+    background: rgba(10,20,40,0.35);
+    backdrop-filter: blur(8px);
     display:flex;
     align-items:center;
     justify-content:center;
@@ -259,9 +365,9 @@ const styles = `
   .modal{
     width: min(980px, 100%);
     border-radius: 18px;
-    background: rgba(12,18,32,0.92);
-    border: 1px solid rgba(255,255,255,0.14);
-    box-shadow: 0 18px 60px rgba(0,0,0,0.45);
+    background: #ffffff;
+    border: 1px solid var(--stroke);
+    box-shadow: var(--shadow);
     overflow:hidden;
   }
   .modalHeader{
@@ -270,37 +376,44 @@ const styles = `
     gap: 10px;
     align-items:flex-start;
     padding: 14px 16px;
-    border-bottom: 1px solid rgba(255,255,255,0.10);
+    border-bottom: 1px solid var(--stroke);
   }
-  .modalTitle{ font-weight: 950; }
+  .modalTitle{ font-weight: 950; color: var(--ink); }
   .modalBody{ padding: 14px 16px; }
   .table{
     width: 100%;
     border-collapse: collapse;
     overflow:hidden;
     border-radius: 12px;
-    border: 1px solid rgba(255,255,255,0.12);
+    border: 1px solid var(--stroke);
+    background: #fff;
   }
   .table th, .table td{
     padding: 10px 10px;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
+    border-bottom: 1px solid rgba(11,87,208,0.10);
     font-size: 12px;
     text-align: start;
     vertical-align: top;
+    color: var(--ink);
   }
-  .table th{ font-weight: 950; background: rgba(255,255,255,0.06); }
+  .table th{
+    font-weight: 950;
+    background: rgba(29,78,216,0.05);
+  }
   .table tr:last-child td{ border-bottom: 0; }
 
   .footer{
     margin-top: 4px;
     border-radius: 18px;
     padding: 14px 16px;
-    background: rgba(0,0,0,0.16);
-    border: 1px solid rgba(255,255,255,0.10);
-    opacity: .90;
+    background: rgba(29,78,216,0.04);
+    border: 1px solid var(--stroke);
+    opacity: .92;
     font-size: 12px;
     line-height: 1.7;
     text-align: center;
+    color: var(--muted);
+    box-shadow: var(--shadow);
   }
 
   @media (max-width: 980px){
@@ -322,16 +435,16 @@ const styles = `
   .chipBtn{
     border-radius: 999px;
     padding: 8px 12px;
-    background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.14);
-    color: var(--text);
+    background: rgba(29,78,216,0.06);
+    border: 1px solid var(--stroke2);
+    color: var(--ink);
     font-weight: 950;
     cursor: pointer;
     font-size: 12px;
   }
   .chipBtnOn{
-    background: rgba(255,255,255,0.14);
-    border-color: rgba(255,255,255,0.24);
+    background: rgba(29,78,216,0.12);
+    border-color: rgba(29,78,216,0.28);
   }
 `;
 
@@ -375,9 +488,6 @@ function decisionTheme(decisionUpper) {
 
 /* =========================
    ✅ UI Decision Logic
-   ✅ IMPORTANT CHANGE:
-   - We now "lock" UI status to REPORT consensus if available
-   - because report & run must never contradict.
    ========================= */
 function normDecision(x) {
   const v = String(x || "").toLowerCase();
@@ -508,40 +618,10 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   // ✅ Methods
   const [methods, setMethods] = useState({ ewma: true, cusum: true, farrington: true });
 
-  // ✅ Time filter + preset
+  // ✅ Time filter + preset only (NO advanced)
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [preset, setPreset] = useState("standard");
-
-  // ✅ Advanced
-  const [advanced, setAdvanced] = useState(false);
-
-  const [ewmaLambda, setEwmaLambda] = useState(PRESETS.standard.ewma.lambda);
-  const [ewmaL, setEwmaL] = useState(PRESETS.standard.ewma.L);
-  const [ewmaBaselineN, setEwmaBaselineN] = useState(PRESETS.standard.ewma.baselineN);
-
-  const [cusumBaselineN, setCusumBaselineN] = useState(PRESETS.standard.cusum.baselineN);
-  const [cusumK, setCusumK] = useState(PRESETS.standard.cusum.k);
-  const [cusumH, setCusumH] = useState(PRESETS.standard.cusum.h);
-
-  const [farringtonBaselineWeeks, setFarringtonBaselineWeeks] = useState(PRESETS.standard.farrington.baselineWeeks);
-  const [farringtonZ, setFarringtonZ] = useState(PRESETS.standard.farrington.z);
-
-  useEffect(() => {
-    if (advanced) return;
-    const p = PRESETS[preset] || PRESETS.standard;
-
-    setEwmaLambda(p.ewma.lambda);
-    setEwmaL(p.ewma.L);
-    setEwmaBaselineN(p.ewma.baselineN);
-
-    setCusumBaselineN(p.cusum.baselineN);
-    setCusumK(p.cusum.k);
-    setCusumH(p.cusum.h);
-
-    setFarringtonBaselineWeeks(p.farrington.baselineWeeks);
-    setFarringtonZ(p.farrington.z);
-  }, [preset, advanced]);
 
   const [loading, setLoading] = useState(false);
   const [runData, setRunData] = useState(null);
@@ -615,30 +695,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     if (preset) params.set("preset", preset);
     if (testCode) params.set("testCode", String(testCode));
 
-    if (advanced) {
-      params.set("advanced", "1");
-
-      params.set("ewmaLambda", String(clampNum(ewmaLambda, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max)));
-      params.set("ewmaL", String(clampNum(ewmaL, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max)));
-      params.set(
-        "ewmaBaselineN",
-        String(clampInt(ewmaBaselineN, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max))
-      );
-
-      params.set(
-        "cusumBaselineN",
-        String(clampInt(cusumBaselineN, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max))
-      );
-      params.set("cusumK", String(clampNum(cusumK, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max)));
-      params.set("cusumH", String(clampNum(cusumH, BOUNDS.cusum.h.min, BOUNDS.cusum.h.max)));
-
-      params.set(
-        "farringtonBaselineWeeks",
-        String(clampInt(farringtonBaselineWeeks, BOUNDS.farrington.baselineWeeks.min, BOUNDS.farrington.baselineWeeks.max))
-      );
-      params.set("farringtonZ", String(clampNum(farringtonZ, BOUNDS.farrington.z.min, BOUNDS.farrington.z.max)));
-    }
-
     return params;
   }
 
@@ -654,12 +710,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   }
 
   /* ======================================================
-     ✅ RUN (fixed)
-     ✅ What we changed to kill contradictions permanently:
-     1) Always send EXACT same params to run/report (scopeParams)
-     2) Add cache-bust param _ts for report
-     3) Force UI to use report.meta.consensus as "source of truth"
-        -> overwrites runData.consensus if report provides it
+     ✅ RUN
+     - no advanced params anymore
      ====================================================== */
   async function runAnalysis() {
     const m = selectedMethods();
@@ -720,18 +772,15 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       reportParams.set("testCode", String(testCode));
       reportParams.set("methods", m.join(","));
       reportParams.set("lang", lang);
-
-      // cache bust to avoid "looks like deploy didn't work"
       reportParams.set("_ts", String(Date.now()));
 
       const repJ = await fetchJSON(`${apiBase}/api/analytics/report?${reportParams.toString()}`, controller.signal);
 
-      // ✅ Get report text
       const extracted = extractReport(repJ?.data?.report, lang);
       const finalReport = (extracted?.trim() ? extracted : "").trim();
       setReportText(finalReport || t.insufficient);
 
-      // ✅ HARD FIX: source-of-truth consensus from REPORT meta
+      // ✅ source-of-truth consensus from REPORT meta
       const repConsensus = repJ?.data?.meta?.consensus || repJ?.data?.meta?.meta?.consensus || null;
       if (repConsensus) {
         setRunData((prev) => {
@@ -740,7 +789,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         });
       }
 
-      // health timestamp (optional)
       try {
         const hj = await fetchJSON(`${apiBase}/health`, controller.signal);
         setLastUpdated(hj?.time || hj?.timestamp || null);
@@ -761,22 +809,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     } catch {}
   }
 
-  function resetAdvancedToPreset() {
-    const p = PRESETS[preset] || PRESETS.standard;
-
-    setEwmaLambda(p.ewma.lambda);
-    setEwmaL(p.ewma.L);
-    setEwmaBaselineN(p.ewma.baselineN);
-
-    setCusumBaselineN(p.cusum.baselineN);
-    setCusumK(p.cusum.k);
-    setCusumH(p.cusum.h);
-
-    setFarringtonBaselineWeeks(p.farrington.baselineWeeks);
-    setFarringtonZ(p.farrington.z);
-  }
-
-  // ✅ Reset: يرجع الصفحة لوضع "قبل Run"
   function resetRun() {
     if (abortRef.current) {
       try {
@@ -792,7 +824,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     setShowDetails(false);
   }
 
-  // ✅ Uploads report loader
   async function loadUploadsReport() {
     setReportLoading(true);
     setReportErr("");
@@ -809,19 +840,12 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     }
   }
 
-  // ✅ Derived view model (only after runData exists)
-  const consensus = runData?.consensus;
-
-  // ✅ القرار الذي سيظهر في UI
-  const uiDecision = computeUiDecision(runData); // "info" | "watch" | "alert"
-  const decision = upper(uiDecision); // "INFO" | "WATCH" | "ALERT"
-
+  const uiDecision = computeUiDecision(runData);
+  const decision = upper(uiDecision);
   const theme = decisionTheme(decision);
   const decisionKey = theme.key;
 
-  // ✅ أسماء الطرق التي أعطت Alert فعلاً
   const methodAlerts = listMethodAlerts(runData);
-
   const weekly = runData?.meta?.weekly || runData?.meta?.meta?.weekly || runData?.weekly || null;
 
   const trendKey = computeTrendFromWeekly(weekly);
@@ -831,12 +855,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     trendKey === "up" ? t.trendUp : trendKey === "down" ? t.trendDown : trendKey === "flat" ? t.trendFlat : t.trendNoData;
 
   const confLabel = confidenceKey === "high" ? t.confHigh : confidenceKey === "med" ? t.confMed : t.confLow;
-
   const statusLabel = decision === "ALERT" ? t.alert : decision === "WATCH" ? t.watch : t.info;
 
   const trustMethods = methodsLabel(selectedMethods());
-
-  // ✅ dataset derived from lastUpload
   const dataset = lastUpload?.ok ? t.uploadOk : t.notAvailable;
 
   const ewCfg = adaptEWMA(chartsPayload?.ewma);
@@ -844,10 +865,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const faCfg = adaptFarrington(chartsPayload?.farrington);
 
   const presetLabel = preset === "low" ? t.presetLow : preset === "high" ? t.presetHigh : t.presetStandard;
-
   const canRunNow = !loading;
 
-  // stratification
   const profile = runData?.profile || null;
   const profileInsight = runData?.profileInsight || null;
 
@@ -876,8 +895,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     }
     if (uiDecision === "watch") {
       return lang === "ar"
-        ? "إشارة تستدعي المراقبة: يوجد تنبيه من طريقة واحدة أو أكثر. يُنصح بالمتابعة القريبة خلال الأسابيع القادمة ومقارنة النطاق عند توفر بيانات أكثر."
-        : "Monitoring signal: one or more methods triggered an alert. Follow closely over the coming weeks and compare scope as more data arrive.";
+        ? "إشارة تستدعي المراقبة: يوجد تنبيه من طريقة واحدة أو أكثر. يُنصح بالمتابعة القريبة خلال الفترة القادمة ومقارنة النطاق عند توفر بيانات أكثر."
+        : "Monitoring signal: one or more methods triggered an alert. Follow closely and compare scope as more data arrive.";
     }
     return lang === "ar"
       ? "لا يوجد إجراء عاجل. الاستمرار في الرصد ورفع العينة لتحسين الثقة."
@@ -897,7 +916,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* Initiative + Disclaimer */}
         <div className="infoGrid">
           <div className="infoCard">
             <div className="infoCardTitle">{t.initiativeTitle}</div>
@@ -909,7 +927,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* ✅ Upload (ONE professional place) */}
+        {/* ✅ Upload */}
         <div style={{ marginTop: 14 }}>
           <UploadCsv
             lang={lang}
@@ -926,14 +944,13 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           />
         </div>
 
-        {/* Scope */}
+        {/* Scope + Uploads report */}
         <div className="formRow" style={{ marginTop: 12 }}>
           <div className="field">
             <label>{t.scope}</label>
             <Dropdown dir={isRTL ? "rtl" : "ltr"} value={scopeMode} onChange={(v) => setScopeMode(v)} options={getScopeOptions(t)} />
           </div>
 
-          {/* ✅ Reports button here */}
           <div className="actions" style={{ alignSelf: "end" }}>
             <button type="button" className="ghostBtn" onClick={loadUploadsReport} disabled={reportLoading}>
               {reportLoading ? "..." : lang === "ar" ? "تقرير الرفعات" : "Uploads Report"}
@@ -966,7 +983,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* Signal (auto) + note */}
+        {/* Signal + hint */}
         <div className="formRow">
           <div className="field">
             <label>{t.signal}</label>
@@ -982,8 +999,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               style={{
                 padding: 10,
                 borderRadius: 12,
-                border: "1px solid rgba(255,255,255,0.14)",
-                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(11,87,208,0.12)",
+                background: "rgba(29,78,216,0.04)",
                 fontSize: 12,
               }}
             >
@@ -992,7 +1009,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* Time filter + Preset */}
+        {/* Time filter + Preset (only) */}
         <div className="formRow">
           <div className="field">
             <label>{t.timeFilter}</label>
@@ -1032,169 +1049,17 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 { value: "high", label: t.presetHigh },
               ]}
             />
+
             <div className="muted" style={{ marginTop: 8 }}>
-              {lang === "ar" ? "Preset الحالي" : "Current preset"}: <span className="tinyPill">{presetLabel}</span> •{" "}
-              {lang === "ar" ? "متقدمة" : "Advanced"}:{" "}
-              <span className="tinyPill">{advanced ? (lang === "ar" ? "نعم" : "Yes") : lang === "ar" ? "لا" : "No"}</span>
+              {lang === "ar" ? "الحساسية الحالية" : "Current sensitivity"}: <span className="tinyPill">{presetLabel}</span>
+            </div>
+
+            <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+              {lang === "ar"
+                ? "ملاحظة: تم تبسيط الصفحة بإزالة الإعدادات المتقدمة لضمان سهولة الاستخدام."
+                : "Note: Advanced tuning was removed to keep the UI clean and easy."}
             </div>
           </div>
-        </div>
-
-        {/* Advanced Panel */}
-        <div
-          className="advWrap"
-          style={{
-            borderRadius: 14,
-            padding: 12,
-            background: "rgba(0,0,0,0.16)",
-            border: "1px solid rgba(255,255,255,0.10)",
-            marginTop: 10,
-          }}
-        >
-          <div className="advHeader" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <div>
-              <div className="advTitle" style={{ fontWeight: 950 }}>
-                {t.advanced}
-              </div>
-              <div className="muted">{t.advancedHint}</div>
-            </div>
-
-            <div className="actions">
-              <button type="button" className="ghostBtn" onClick={() => setAdvanced((s) => !s)} disabled={loading}>
-                {advanced ? t.advancedOff : t.advancedOn}
-              </button>
-
-              <button type="button" className="ghostBtn" onClick={resetAdvancedToPreset} disabled={loading}>
-                {t.resetToPreset}
-              </button>
-            </div>
-          </div>
-
-          {advanced ? (
-            <div
-              className="advGrid"
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, minmax(0,1fr))",
-                gap: 10,
-                marginTop: 10,
-              }}
-            >
-              <div
-                className="advCard"
-                style={{
-                  borderRadius: 14,
-                  padding: 10,
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.10)",
-                }}
-              >
-                <div className="advCardTitle" style={{ fontWeight: 950, marginBottom: 8 }}>
-                  {t.ewmaBlock}
-                </div>
-                <ParamSlider
-                  name={t.paramLambda}
-                  value={ewmaLambda}
-                  min={BOUNDS.ewma.lambda.min}
-                  max={BOUNDS.ewma.lambda.max}
-                  step={0.01}
-                  onChange={(v) => setEwmaLambda(clampNum(v, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max))}
-                  hint={t.hintLambda}
-                />
-                <ParamSlider
-                  name={t.paramL}
-                  value={ewmaL}
-                  min={BOUNDS.ewma.L.min}
-                  max={BOUNDS.ewma.L.max}
-                  step={0.1}
-                  onChange={(v) => setEwmaL(clampNum(v, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max))}
-                  hint={t.hintL}
-                />
-                <ParamSlider
-                  name={t.paramEwmaBaselineN}
-                  value={ewmaBaselineN}
-                  min={BOUNDS.ewma.baselineN.min}
-                  max={BOUNDS.ewma.baselineN.max}
-                  step={1}
-                  onChange={(v) => setEwmaBaselineN(clampInt(v, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max))}
-                  hint={t.hintBaselineN}
-                />
-              </div>
-
-              <div
-                className="advCard"
-                style={{
-                  borderRadius: 14,
-                  padding: 10,
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.10)",
-                }}
-              >
-                <div className="advCardTitle" style={{ fontWeight: 950, marginBottom: 8 }}>
-                  {t.cusumBlock}
-                </div>
-                <ParamSlider
-                  name={t.paramCusumBaselineN}
-                  value={cusumBaselineN}
-                  min={BOUNDS.cusum.baselineN.min}
-                  max={BOUNDS.cusum.baselineN.max}
-                  step={1}
-                  onChange={(v) => setCusumBaselineN(clampInt(v, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max))}
-                  hint={t.hintBaselineN}
-                />
-                <ParamSlider
-                  name={t.paramK}
-                  value={cusumK}
-                  min={BOUNDS.cusum.k.min}
-                  max={BOUNDS.cusum.k.max}
-                  step={0.01}
-                  onChange={(v) => setCusumK(clampNum(v, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max))}
-                  hint={t.hintK}
-                />
-                <ParamSlider
-                  name={t.paramH}
-                  value={cusumH}
-                  min={BOUNDS.cusum.h.min}
-                  max={BOUNDS.cusum.h.max}
-                  step={0.1}
-                  onChange={(v) => setCusumH(clampNum(v, BOUNDS.cusum.h.min, BOUNDS.cusum.h.max))}
-                  hint={t.hintH}
-                />
-              </div>
-
-              <div
-                className="advCard"
-                style={{
-                  borderRadius: 14,
-                  padding: 10,
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.10)",
-                }}
-              >
-                <div className="advCardTitle" style={{ fontWeight: 950, marginBottom: 8 }}>
-                  {t.farringtonBlock}
-                </div>
-                <ParamSlider
-                  name={t.paramFarrBaseline}
-                  value={farringtonBaselineWeeks}
-                  min={BOUNDS.farrington.baselineWeeks.min}
-                  max={BOUNDS.farrington.baselineWeeks.max}
-                  step={1}
-                  onChange={(v) => setFarringtonBaselineWeeks(clampInt(v, BOUNDS.farrington.baselineWeeks.min, BOUNDS.farrington.baselineWeeks.max))}
-                  hint={t.hintFarrBaseline}
-                />
-                <ParamSlider
-                  name={t.paramZ}
-                  value={farringtonZ}
-                  min={BOUNDS.farrington.z.min}
-                  max={BOUNDS.farrington.z.max}
-                  step={0.05}
-                  onChange={(v) => setFarringtonZ(clampNum(v, BOUNDS.farrington.z.min, BOUNDS.farrington.z.max))}
-                  hint={t.hintZ}
-                />
-              </div>
-            </div>
-          ) : null}
         </div>
 
         {/* Methods + Actions */}
@@ -1222,10 +1087,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             <button
               type="button"
               className="dangerBtn"
-              onClick={() => {
-                setPreset("high");
-                setAdvanced(false);
-              }}
+              onClick={() => setPreset("high")}
               disabled={loading}
             >
               {t.quickHigh}
@@ -1273,7 +1135,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           <div className="mini">
             <div className="miniRow">
               <div className="miniKey">{t.methodsUsed}</div>
-              <div className="miniVal">{trustMethods}</div>
+              <div className="miniVal">{methodsLabel(selectedMethods())}</div>
             </div>
             <div className="miniRow">
               <div className="miniKey">{t.lastUpdated}</div>
@@ -1286,17 +1148,17 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       {/* ✅ النتائج مخفية بالكامل قبل Run */}
       {runData ? (
         <section className="grid">
-          <div className="card cardWide" style={{ padding: 0, background: "transparent", border: "0" }}>
+          <div className="card cardWide" style={{ padding: 0, background: "transparent", border: "0", boxShadow: "none" }}>
             <div className="statusCard">
               <div
                 className="statusGlow"
                 style={{
                   background:
                     decisionKey === "alert"
-                      ? "radial-gradient(circle at 30% 30%, rgba(239,68,68,0.35), transparent 55%)"
+                      ? "radial-gradient(circle at 30% 30%, rgba(239,68,68,0.20), transparent 55%)"
                       : decisionKey === "watch"
-                      ? "radial-gradient(circle at 30% 30%, rgba(245,158,11,0.32), transparent 55%)"
-                      : "radial-gradient(circle at 30% 30%, rgba(16,185,129,0.30), transparent 55%)",
+                      ? "radial-gradient(circle at 30% 30%, rgba(245,158,11,0.18), transparent 55%)"
+                      : "radial-gradient(circle at 30% 30%, rgba(29,78,216,0.18), transparent 55%)",
                 }}
               />
 
@@ -1315,7 +1177,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                       height: 10,
                       borderRadius: 999,
                       background: theme.color,
-                      boxShadow: `0 0 0 6px rgba(255,255,255,0.06)`,
+                      boxShadow: `0 0 0 6px rgba(29,78,216,0.08)`,
                       display: "inline-block",
                     }}
                   />
@@ -1346,7 +1208,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   </div>
                   <div className="kv">
                     <div className="k">{t.methodsUsed}</div>
-                    <div className="v">{trustMethods}</div>
+                    <div className="v">{methodsLabel(selectedMethods())}</div>
                   </div>
                 </div>
               </div>
@@ -1360,7 +1222,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                     <b>{t.actions}</b> — {actionsText}
                   </div>
 
-                  {/* ✅ explain single-method alerts */}
                   {methodAlerts?.length ? (
                     <div style={{ marginTop: 2 }}>
                       <b>{lang === "ar" ? "ملاحظة:" : "Note:"}</b>{" "}
@@ -1380,7 +1241,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             </div>
           </div>
 
-          {/* Technical details are hidden by default */}
+          {/* Details */}
           {showDetails ? (
             <>
               <div className="card cardWide">
@@ -1389,6 +1250,42 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 </div>
                 <div className="muted" style={{ marginBottom: 10 }}>
                   {t.chartsHint}
+                </div>
+
+                {/* ✅ Show data sufficiency warnings per method (if backend includes it) */}
+                <div style={{ marginBottom: 10 }}>
+                  {methods.ewma ? (
+                    <MethodStatusBanner
+                      title="EWMA"
+                      status={
+                        runData?.results?.ewma?.dataSufficiency ||
+                        (runData?.results?.ewma?.points?.length ? { ok: true } : { ok: false, reason: "NO_POINTS" })
+                      }
+                      lang={lang}
+                    />
+                  ) : null}
+
+                  {methods.cusum ? (
+                    <MethodStatusBanner
+                      title="CUSUM"
+                      status={
+                        runData?.results?.cusum?.dataSufficiency ||
+                        (runData?.results?.cusum?.points?.length ? { ok: true } : { ok: false, reason: "NO_POINTS" })
+                      }
+                      lang={lang}
+                    />
+                  ) : null}
+
+                  {methods.farrington ? (
+                    <MethodStatusBanner
+                      title="Farrington"
+                      status={
+                        runData?.results?.farrington?.dataSufficiency ||
+                        (runData?.results?.farrington?.points?.length ? { ok: true } : { ok: false, reason: "NO_POINTS" })
+                      }
+                      lang={lang}
+                    />
+                  ) : null}
                 </div>
 
                 <div style={{ display: "grid", gap: 12 }}>
@@ -1426,20 +1323,11 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                     <div className="stratGrid">
                       <StratCard title={t.bySex} items={profile?.bySex || []} getKey={(it) => keyLabelSex(it?.sex)} t={t} />
                       <StratCard title={t.byAge} items={profile?.byAge || []} getKey={(it) => safeLabel(it?.ageBand)} t={t} />
-                      <StratCard
-                        title={t.byNationality}
-                        items={profile?.byNationality || []}
-                        getKey={(it) => safeLabel(it?.nationality)}
-                        t={t}
-                      />
+                      <StratCard title={t.byNationality} items={profile?.byNationality || []} getKey={(it) => safeLabel(it?.nationality)} t={t} />
                     </div>
 
                     {insightText ? (
-                      <div
-                        className="reportBox2"
-                        style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }}
-                        dir={isRTL ? "rtl" : "ltr"}
-                      >
+                      <div className="reportBox2" style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }} dir={isRTL ? "rtl" : "ltr"}>
                         {insightText}
                       </div>
                     ) : null}
@@ -1486,7 +1374,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
             <div className="modalBody">
               {reportErr ? <div className="muted">{reportErr}</div> : null}
-
               {!reportErr && !reportData ? <div className="muted">{lang === "ar" ? "لا توجد بيانات." : "No data."}</div> : null}
 
               {reportData?.totals ? (

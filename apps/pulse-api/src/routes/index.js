@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-
+router.use("/upload", require("./upload.routes"));
 // NEW filenames
 const ingestRoutes = require("./ingest.routes");
 const analyticsRoutes = require("./analytics.routes");

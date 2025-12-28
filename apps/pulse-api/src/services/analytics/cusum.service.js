@@ -31,6 +31,7 @@ function buildCaseDef({ signalType, testCode }) {
   const st = String(signalType || "").toLowerCase();
   const tc = normCode(testCode);
 
+  // HB / anemia special-case (kept for backward compatibility)
   if (st === "anemia" || tc === "HB" || tc === "HGB") {
     return {
       direction: "low",
@@ -38,6 +39,7 @@ function buildCaseDef({ signalType, testCode }) {
     };
   }
 
+  // generic clinical thresholds
   const cfg = CLINICAL?.[tc] || null;
   if (!cfg) return null;
 
@@ -48,11 +50,13 @@ function buildCaseDef({ signalType, testCode }) {
     isCase: (value, row) => {
       const band = pickBand(cfg.bands, row?.ageYears);
       if (!band) return false;
+
       if (dir === "high") {
         const u = typeof band.upper === "number" ? band.upper : null;
         if (u == null) return false;
         return value > u;
       }
+
       const l = typeof band.lower === "number" ? band.lower : null;
       if (l == null) return false;
       return value < l;
@@ -73,11 +77,35 @@ function safeNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-function extractValue(row) {
+/**
+ * ✅ General value extractor:
+ * 1) Universal: row.value
+ * 2) Legacy HB: row.hb / row.hgb
+ * 3) Smart fallback: column named after testCode (wbc/crp/plt/...)
+ */
+function extractValue(row, testCode) {
+  // 1) universal schema
   const v = safeNum(row?.value);
   if (v != null) return v;
+
+  // 2) legacy HB/HGB
   const hb = safeNum(row?.hb);
   if (hb != null) return hb;
+
+  const hgb = safeNum(row?.hgb);
+  if (hgb != null) return hgb;
+
+  // 3) smart fallback: column equals testCode (case-insensitive)
+  const tc = normCode(testCode);
+  if (tc) {
+    const lowerKey = tc.toLowerCase();
+    const directLower = safeNum(row?.[lowerKey]);
+    if (directLower != null) return directLower;
+
+    const directUpper = safeNum(row?.[tc]);
+    if (directUpper != null) return directUpper;
+  }
+
   return null;
 }
 
@@ -95,6 +123,7 @@ function std(arr) {
 
 /**
  * ✅ Generic CUSUM over weekly CASE rate.
+ * Works for any testCode that has a case definition (HB built-in OR CLINICAL thresholds).
  */
 function computeSignalCusum({
   rows,
@@ -107,7 +136,9 @@ function computeSignalCusum({
   preset = "standard",
   timeRange = null,
 }) {
-  const caseDef = buildCaseDef({ signalType, testCode });
+  const tcNorm = normCode(testCode);
+  const caseDef = buildCaseDef({ signalType, testCode: tcNorm });
+
   if (!caseDef) {
     return {
       cusum: {
@@ -117,12 +148,15 @@ function computeSignalCusum({
         k,
         h,
         direction: null,
-        testCode: normCode(testCode),
+        testCode: tcNorm,
         points: [],
       },
       interpretation:
         lang === "both"
-          ? { ar: "لا توجد عتبات سريرية معرفة لهذا الفحص بعد.", en: "No clinical thresholds defined for this test yet." }
+          ? {
+              ar: "لا توجد عتبات سريرية معرفة لهذا الفحص بعد.",
+              en: "No clinical thresholds defined for this test yet.",
+            }
           : lang === "ar"
           ? "لا توجد عتبات سريرية معرفة لهذا الفحص بعد."
           : "No clinical thresholds defined for this test yet.",
@@ -130,14 +164,16 @@ function computeSignalCusum({
   }
 
   const byWeek = new Map();
+
   for (const r of rows || []) {
     const dt = r?.testDate || r?.collectedAt;
     if (!dt) continue;
 
+    // If row has testCode, enforce match; if not, allow and rely on extractValue fallback.
     const rowCode = r?.testCode ? normCode(r.testCode) : null;
-    if (rowCode && normCode(testCode) && rowCode !== normCode(testCode)) continue;
+    if (rowCode && tcNorm && rowCode !== tcNorm) continue;
 
-    const v = extractValue(r);
+    const v = extractValue(r, tcNorm);
     if (v == null) continue;
 
     const wk = getWeekKey(dt);
@@ -149,9 +185,11 @@ function computeSignalCusum({
   }
 
   const weeks = Array.from(byWeek.keys()).sort();
+
   const points = weeks.map((wk) => {
     const g = byWeek.get(wk);
     const rate = g.n > 0 ? g.cases / g.n : 0;
+
     return {
       week: wk,
       n: g.n,
@@ -168,12 +206,13 @@ function computeSignalCusum({
   const baselineMean = mean(baseRates) ?? 0;
   const baselineStd = std(baseRates);
 
-  // one-sided upper CUSUM on rate
+  // one-sided upper CUSUM on standardized rate
   let c = 0;
   const outPoints = points.map((p) => {
-    const s = (p.rate - baselineMean) / (baselineStd || 1); // standardized-ish; safe if std=0
+    const s = (p.rate - baselineMean) / (baselineStd || 1); // safe if std=0
     c = Math.max(0, c + (s - k));
     const alert = c > h && baselineStd > 0;
+
     return {
       week: p.week,
       n: p.n,
@@ -191,17 +230,17 @@ function computeSignalCusum({
 
   const interpEn =
     !outPoints.length
-      ? `No data available for ${normCode(testCode)}.`
-      : `CUSUM tracked weekly ${caseDef.direction.toUpperCase()}-case rate for ${normCode(
-          testCode
-        )}. Latest week ${last.week} has ${last.n} tests; alert=${last.alert ? "YES" : "NO"}.`;
+      ? `No data available for ${tcNorm}.`
+      : `CUSUM tracked weekly ${caseDef.direction.toUpperCase()}-case rate for ${tcNorm}. Latest week ${last.week} has ${last.n} tests; alert=${
+          last.alert ? "YES" : "NO"
+        }.`;
 
   const interpAr =
     !outPoints.length
-      ? `لا توجد بيانات للفحص ${normCode(testCode)}.`
-      : `تم تتبع CUSUM لمعدل الحالات (${caseDef.direction === "high" ? "مرتفع" : "منخفض"}) أسبوعيًا للفحص ${normCode(
-          testCode
-        )}. آخر أسبوع ${last.week} عدد الفحوصات ${last.n}؛ إنذار=${last.alert ? "نعم" : "لا"}.`;
+      ? `لا توجد بيانات للفحص ${tcNorm}.`
+      : `تم تتبع CUSUM لمعدل الحالات (${caseDef.direction === "high" ? "مرتفع" : "منخفض"}) أسبوعيًا للفحص ${tcNorm}. آخر أسبوع ${last.week} عدد الفحوصات ${last.n}؛ إنذار=${
+          last.alert ? "نعم" : "لا"
+        }.`;
 
   return {
     cusum: {
@@ -211,14 +250,14 @@ function computeSignalCusum({
       k,
       h,
       direction: caseDef.direction,
-      testCode: normCode(testCode),
+      testCode: tcNorm,
       points: outPoints,
     },
-    interpretation:
-      lang === "both" ? { ar: interpAr, en: interpEn } : lang === "ar" ? interpAr : interpEn,
+    interpretation: lang === "both" ? { ar: interpAr, en: interpEn } : lang === "ar" ? interpAr : interpEn,
   };
 }
 
+// Backward-compatible wrapper
 function computeAnemiaCusum(args) {
   return computeSignalCusum({ ...args, signalType: "anemia", testCode: "HB" });
 }
