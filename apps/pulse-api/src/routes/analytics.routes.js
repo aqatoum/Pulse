@@ -9,9 +9,23 @@ const { computeSignalProfile, computeAnemiaProfile } = require("../services/anal
 const { buildReport } = require("../services/analytics/report.service");
 
 const { buildConsensus, buildSignatureInsight } = require("../services/analytics/consensus.service");
+const { scanRowsQuality } = require("../services/quality/dataQualityScan.service");
+
 
 const { apiOk, apiError } = require("../utils/response");
 const ANALYTICS_DEFAULTS = require("../config/analytics.defaults");
+
+// ✅ NEW: ML-assisted explanation report generator (does NOT replace stats)
+let generateExplanationReport = null;
+try {
+  // Put the service here:
+  // apps/pulse-api/src/services/reports/explainReport/explainReport.service.js
+  ({ generateExplanationReport } = require("../services/reports/explainReport/explainReport.service"));
+} catch (e) {
+  // Do not break the whole API if the new file isn't added yet.
+  // We'll fall back to legacy narrative report.
+  generateExplanationReport = null;
+}
 
 const router = express.Router();
 
@@ -132,7 +146,7 @@ function buildBaseQuery(scope) {
 }
 
 /* ===============================
-   ✅ NEW: Human scope label (NO "GLOBAL" in narrative)
+   ✅ Human scope label (NO "GLOBAL" in narrative)
    =============================== */
 function isGlobalScope(scope) {
   const st = String(scope?.scopeType || "").toUpperCase();
@@ -165,7 +179,6 @@ function humanScopeLabel(scope, lang) {
   if (scope?.regionId) return isAr ? `منطقة: ${scope.regionId}` : `Region: ${scope.regionId}`;
   if (scope?.labId) return isAr ? `مختبر: ${scope.labId}` : `Lab: ${scope.labId}`;
 
-  // fallback
   const x = scope?.scopeId || "—";
   return isAr ? `النطاق: ${x}` : `Scope: ${x}`;
 }
@@ -269,7 +282,7 @@ function pickInterpretationForConsensus(interpretation, lang) {
 }
 
 /* ===============================
-   ✅ NEW: extract perMethod safely
+   ✅ extract perMethod safely
    =============================== */
 function normalizeLevel(x, fallback = "info") {
   const v = String(x || "").toLowerCase();
@@ -471,7 +484,9 @@ router.get("/anemia-profile", async (req, res) => {
     const testCode = normCode(req.query.testCode || (signal === "anemia" ? "HB" : ""));
 
     const dateFilter = getDateRangeFilter(req);
-    const { rows, dateRange } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
+    const { rows, dateRange, rawCount } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
+const dataQualityScan = scanRowsQuality({ rows, rawCount });
+
 
     const out =
       signal === "anemia"
@@ -507,7 +522,6 @@ router.get("/anemia-profile", async (req, res) => {
 
 /* ===============================
    ✅ RUN — /api/analytics/run
-   ✅ FIXED: signatureInsight AFTER consensus fix
    =============================== */
 router.get("/run", async (req, res) => {
   try {
@@ -583,7 +597,6 @@ router.get("/run", async (req, res) => {
       }
     }
 
-    // ✅ Profile
     const profOut =
       signal === "anemia"
         ? computeAnemiaProfile({ rows, lang: "both" })
@@ -595,9 +608,7 @@ router.get("/run", async (req, res) => {
     // ✅ First consensus (service)
     let consensus = buildConsensus({ interpretations, methods });
 
-    // ==========================
-    // ✅ FIX #1: ensure consensus.perMethod is filled & consistent
-    // ==========================
+    // ✅ Ensure consensus.perMethod is filled & consistent
     const perMethod = {};
     for (const method of methods) {
       const interp = extractMethodInterpretation(interpretations?.[method]);
@@ -613,7 +624,7 @@ router.get("/run", async (req, res) => {
       perMethod: computedConsensus.perMethod,
     };
 
-    // ✅ Signature Insight (NOW uses corrected consensus)
+    // ✅ Signature Insight
     const signatureInsight =
       lang === "both"
         ? {
@@ -633,9 +644,6 @@ router.get("/run", async (req, res) => {
 
     const dataQuality = computeDataQuality({ profile, results });
 
-    // ==========================
-    // ✅ FIX #2: data quality note ALWAYS when insufficient
-    // ==========================
     const notEnoughData = (dataQuality?.overallN ?? 0) < 20 || (dataQuality?.weeksCoverage ?? 0) < 4;
 
     if (notEnoughData) {
@@ -682,7 +690,8 @@ router.get("/run", async (req, res) => {
           results,
           profile,
           profileInsight,
-          meta: { dataQuality, dateRange },
+          meta: { dataQuality, dataQualityScan, dateRange },
+
         },
       })
     );
@@ -694,7 +703,8 @@ router.get("/run", async (req, res) => {
 
 /* ===============================
    REPORT — /api/analytics/report
-   ✅ FIXED: remove "GLOBAL" from narrative + keep consistent
+   ✅ NEW: default = ML explanation report
+   ✅ Backward-compatible: reportType=narrative returns old buildReport
    =============================== */
 router.get("/report", async (req, res) => {
   try {
@@ -718,7 +728,9 @@ router.get("/report", async (req, res) => {
       return res.status(400).json(apiError({ status: 400, error: "methods is required" }));
     }
 
-    const { rows, dateRange } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
+    const { rows, dateRange, rawCount } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
+const dataQualityScan = scanRowsQuality({ rows, rawCount });
+
 
     const results = {};
     const interpretationsForConsensus = {};
@@ -778,7 +790,7 @@ router.get("/report", async (req, res) => {
     const profile = profOut?.profile || null;
     const profileInsight = profOut?.insight || null;
 
-    // ✅ Make consensus consistent with method points
+    // ✅ consensus consistent with method points
     const perMethod = {};
     for (const method of methods) {
       const interp = extractMethodInterpretation(interpretationsForConsensus?.[method]);
@@ -828,68 +840,126 @@ router.get("/report", async (req, res) => {
     if (notEnoughData && String(consensus?.decision || "").toLowerCase() === "alert") {
       consensus.decision = "watch";
       const noteAr2 = "ملاحظة جودة: تم تخفيض القرار من ALERT إلى WATCH لأن البيانات غير كافية لإنذار موثوق.";
-      const noteEn2 = "Data quality note: Decision was downgraded from ALERT to WATCH due to insufficient data for a reliable alert.";
+      const noteEn2 =
+        "Data quality note: Decision was downgraded from ALERT to WATCH due to insufficient data for a reliable alert.";
       if (signatureInsight?.ar) signatureInsight.ar.dataQualityNote = noteAr2;
       if (signatureInsight?.en) signatureInsight.en.dataQualityNote = noteEn2;
     }
 
-    // ✅ NEW: friendly scope label for narrative (no "GLOBAL")
+    // ✅ Friendly scope label
     const scopeLabelAr = humanScopeLabel(scopeRes.scope, "ar");
     const scopeLabelEn = humanScopeLabel(scopeRes.scope, "en");
-    const scopeLabelForReport = lang === "ar" ? scopeLabelAr : scopeLabelEn;
 
-    // ✅ Build report (pass label instead of GLOBAL)
-    const built = buildReport({
-      facilityId: scopeLabelForReport, // ✅ was scopeRes.scope.scopeId (GLOBAL)
-      signalType: signal,
-      testCode,
-      methods,
-      consensus,
-      signatureInsight,
-      profile,
-      lang,
-      weeksCount: dataQuality.weeksCoverage,
-      baselineStd: results?.ewma?.baselineStd ?? null,
+    // ✅ Choose report type WITHOUT breaking old one
+    // default is ML if available
+    const reportTypeRaw = String(req.query.reportType || "ml").toLowerCase();
+    const wantNarrative = reportTypeRaw === "narrative" || reportTypeRaw === "legacy" || reportTypeRaw === "old";
 
-      // (optional) some report builders accept this extra field; harmless if ignored
-      scopeLabel: scopeLabelForReport,
-      scopeType: scopeRes.scope.scopeType,
-      scopeId: scopeRes.scope.scopeId,
-    });
+    // ==========================================================
+    // ✅ Option 1: Legacy narrative report (old behavior)
+    // ==========================================================
+    if (wantNarrative || !generateExplanationReport) {
+      const scopeLabelForReport = lang === "ar" ? scopeLabelAr : scopeLabelEn;
+
+      const built = buildReport({
+        facilityId: scopeLabelForReport,
+        signalType: signal,
+        testCode,
+        methods,
+        consensus,
+        signatureInsight,
+        profile,
+        lang,
+        weeksCount: dataQuality.weeksCoverage,
+        baselineStd: results?.ewma?.baselineStd ?? null,
+
+        scopeLabel: scopeLabelForReport,
+        scopeType: scopeRes.scope.scopeType,
+        scopeId: scopeRes.scope.scopeId,
+      });
+
+      let reportText = "";
+      let translations = null;
+
+      if (lang === "both") {
+        reportText = String(built?.en || "");
+        translations = { ar: String(built?.ar || ""), en: String(built?.en || "") };
+      } else {
+        reportText = String(built || "");
+      }
+
+      return res.json(
+        apiOk({
+          ...withScopeTop(scopeRes),
+          analysis: {
+            signalType: signal,
+            method: "REPORT",
+            params: {
+              signal,
+              testCode,
+              methods,
+              lang,
+              ...scopeRes.scope,
+              locked: params.locked,
+              preset: params.preset,
+              advanced: String(req.query.advanced || "0") === "1",
+              reportType: "narrative",
+            },
+            dateRange,
+          },
+          data: {
+            report: reportText,
+            ...(translations ? { translations } : {}),
+            meta: { dataQuality, dataQualityScan, dateRange, consensus },
+
+          },
+          interpretation: null,
+        })
+      );
+    }
+
+    // ==========================================================
+    // ✅ Option 2: ML-assisted explanation report (NEW default)
+    // ==========================================================
+    const makeML = (oneLang) => {
+      const isAr = String(oneLang).toLowerCase() === "ar";
+      const scopeLabel = isAr ? scopeLabelAr : scopeLabelEn;
+
+      const start = dateRange?.filtered?.start || "—";
+      const end = dateRange?.filtered?.end || "—";
+      const timeRange = isAr ? `${start} إلى ${end}` : `${start} to ${end}`;
+
+      return generateExplanationReport({
+        lang: oneLang,
+        signalLabel: isAr ? "إشارة فقر الدم" : "Anemia signal",
+        facilityId: scopeLabel,
+        timeRange,
+        ewma: results.ewma || null,
+        cusum: results.cusum || null,
+        profile: { profile }, // keep shape stable
+      });
+    };
 
     let reportText = "";
     let translations = null;
 
     if (lang === "both") {
-      reportText = String(built?.en || "");
-      translations = { ar: String(built?.ar || ""), en: String(built?.en || "") };
+      const outAr = makeML("ar");
+      const outEn = makeML("en");
+      translations = { ar: String(outAr?.reportText || ""), en: String(outEn?.reportText || "") };
+      reportText = translations.en;
     } else {
-      reportText = String(built || "");
+      const out = makeML(lang);
+      reportText = String(out?.reportText || "");
     }
 
-    // ✅ NEW: safety cleanup (in case buildReport prints GLOBAL anywhere)
-    const cleanOne = (txt) => {
-      if (!txt) return txt;
-      let out = String(txt);
-
-      // Arabic common patterns
-      out = out.replace(/\bGLOBAL\b/g, lang === "ar" ? scopeLabelAr : scopeLabelEn);
-      out = out.replace(/المنشأة:\s*GLOBAL/g, `النطاق: ${scopeLabelAr}`);
-      out = out.replace(/Scope:\s*GLOBAL/g, `Scope: ${scopeLabelEn}`);
-
-      // If your report uses "المنشأة" keep it consistent:
-      out = out.replace(/المنشأة:\s*(وطني.*|مرفق:.*|منطقة:.*|مختبر:.*)/g, (m) => {
-        // convert "المنشأة" to "النطاق" لتوحيد المصطلحات
-        return m.replace("المنشأة:", "النطاق:");
-      });
-
-      return out;
-    };
-
-    reportText = cleanOne(reportText);
+    // ✅ guarantee non-empty
+    if (!reportText.trim()) {
+      reportText = lang === "ar" ? "لا تتوفر بيانات كافية لإنشاء تقرير." : "Insufficient data to generate a report.";
+    }
     if (translations) {
-      translations.ar = cleanOne(translations.ar);
-      translations.en = cleanOne(translations.en);
+      if (!translations.ar?.trim()) translations.ar = "لا تتوفر بيانات كافية لإنشاء تقرير.";
+      if (!translations.en?.trim()) translations.en = "Insufficient data to generate a report.";
     }
 
     return res.json(
@@ -907,6 +977,7 @@ router.get("/report", async (req, res) => {
             locked: params.locked,
             preset: params.preset,
             advanced: String(req.query.advanced || "0") === "1",
+            reportType: "ml",
           },
           dateRange,
         },
