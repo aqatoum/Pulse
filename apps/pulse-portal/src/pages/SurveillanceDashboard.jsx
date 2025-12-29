@@ -257,24 +257,16 @@ const styles = `
     z-index: 9999;
   }
   .modal{
-  width: min(1100px, 100%);
-  max-height: calc(100vh - 32px);   /* ✅ prevent overflow outside screen */
-  border-radius: 18px;
-  background: rgba(12,18,32,0.92);
-  border: 1px solid rgba(255,255,255,0.14);
-  box-shadow: 0 18px 60px rgba(0,0,0,0.45);
-  overflow:hidden;
-  display:flex;
-  flex-direction: column;          /* ✅ header fixed, body scrolls */
-}
-
-.modalBody{
-  padding: 14px 16px;
-  overflow: auto;                  /* ✅ scroll inside */
-  max-height: calc(100vh - 120px); /* ✅ leaves room for header */
-  -webkit-overflow-scrolling: touch;
-}
-
+    width: min(1100px, 100%);
+    max-height: calc(100vh - 32px);
+    border-radius: 18px;
+    background: rgba(12,18,32,0.92);
+    border: 1px solid rgba(255,255,255,0.14);
+    box-shadow: 0 18px 60px rgba(0,0,0,0.45);
+    overflow:hidden;
+    display:flex;
+    flex-direction: column;
+  }
   .modalHeader{
     display:flex;
     justify-content:space-between;
@@ -284,7 +276,12 @@ const styles = `
     border-bottom: 1px solid rgba(255,255,255,0.10);
   }
   .modalTitle{ font-weight: 950; }
-  .modalBody{ padding: 14px 16px; }
+  .modalBody{
+    padding: 14px 16px;
+    overflow: auto;
+    max-height: calc(100vh - 120px);
+    -webkit-overflow-scrolling: touch;
+  }
   .table{
     width: 100%;
     border-collapse: collapse;
@@ -347,7 +344,7 @@ const styles = `
 `;
 
 /* =========================
-   ✅ Trend + Confidence (simple, explainable)
+   ✅ Trend + Confidence
    ========================= */
 function computeTrendFromWeekly(weekly) {
   const w = Array.isArray(weekly) ? weekly : [];
@@ -384,12 +381,6 @@ function decisionTheme(decisionUpper) {
   return { key: "info", color: "var(--info)" };
 }
 
-/* =========================
-   ✅ UI Decision Logic
-   ✅ IMPORTANT CHANGE:
-   - We now "lock" UI status to REPORT consensus if available
-   - because report & run must never contradict.
-   ========================= */
 function normDecision(x) {
   const v = String(x || "").toLowerCase();
   if (v === "alert" || v === "watch" || v === "info") return v;
@@ -418,7 +409,6 @@ function deriveDecisionFromResults(results) {
 function computeUiDecision(runData) {
   const d = normDecision(runData?.consensus?.decision);
 
-  // extra guard: single-method alert => show WATCH
   const pm = runData?.consensus?.perMethod || {};
   const methodLevels = Object.values(pm).map((x) => String(x?.alertLevel || "").toLowerCase());
   const consensusAlertCount = methodLevels.filter((x) => x === "alert").length;
@@ -524,9 +514,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const [endDate, setEndDate] = useState("");
   const [preset, setPreset] = useState("standard");
 
-  // ✅ Advanced
-  const [advanced, setAdvanced] = useState(false);
-
+  // ✅ (Removed advanced UI) — لكن نخلي قيم preset الداخلية كما هي عشان run لا ينكسر
   const [ewmaLambda, setEwmaLambda] = useState(PRESETS.standard.ewma.lambda);
   const [ewmaL, setEwmaL] = useState(PRESETS.standard.ewma.L);
   const [ewmaBaselineN, setEwmaBaselineN] = useState(PRESETS.standard.ewma.baselineN);
@@ -538,10 +526,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const [farringtonBaselineWeeks, setFarringtonBaselineWeeks] = useState(PRESETS.standard.farrington.baselineWeeks);
   const [farringtonZ, setFarringtonZ] = useState(PRESETS.standard.farrington.z);
 
+  // كلما تغير preset نحدث القيم تلقائيًا
   useEffect(() => {
-    if (advanced) return;
     const p = PRESETS[preset] || PRESETS.standard;
-
     setEwmaLambda(p.ewma.lambda);
     setEwmaL(p.ewma.L);
     setEwmaBaselineN(p.ewma.baselineN);
@@ -552,7 +539,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
     setFarringtonBaselineWeeks(p.farrington.baselineWeeks);
     setFarringtonZ(p.farrington.z);
-  }, [preset, advanced]);
+  }, [preset]);
 
   const [loading, setLoading] = useState(false);
   const [runData, setRunData] = useState(null);
@@ -563,13 +550,10 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [dataRange, setDataRange] = useState(null);
 
-  // Charts payload from RUN
   const [chartsPayload, setChartsPayload] = useState(null);
 
-  // ✅ Upload state
   const [lastUpload, setLastUpload] = useState(null);
 
-  // technical details collapsed by default
   const [showDetails, setShowDetails] = useState(false);
 
   // ✅ Uploads report UI state
@@ -626,29 +610,21 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     if (preset) params.set("preset", preset);
     if (testCode) params.set("testCode", String(testCode));
 
-    if (advanced) {
-      params.set("advanced", "1");
+    // ✅ لا يوجد UI advanced، لكن نرسل القيم الحالية لضمان نفس سلوك الحساب
+    params.set("advanced", "1");
+    params.set("ewmaLambda", String(clampNum(ewmaLambda, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max)));
+    params.set("ewmaL", String(clampNum(ewmaL, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max)));
+    params.set("ewmaBaselineN", String(clampInt(ewmaBaselineN, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max)));
 
-      params.set("ewmaLambda", String(clampNum(ewmaLambda, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max)));
-      params.set("ewmaL", String(clampNum(ewmaL, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max)));
-      params.set(
-        "ewmaBaselineN",
-        String(clampInt(ewmaBaselineN, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max))
-      );
+    params.set("cusumBaselineN", String(clampInt(cusumBaselineN, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max)));
+    params.set("cusumK", String(clampNum(cusumK, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max)));
+    params.set("cusumH", String(clampNum(cusumH, BOUNDS.cusum.h.min, BOUNDS.cusum.h.max)));
 
-      params.set(
-        "cusumBaselineN",
-        String(clampInt(cusumBaselineN, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max))
-      );
-      params.set("cusumK", String(clampNum(cusumK, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max)));
-      params.set("cusumH", String(clampNum(cusumH, BOUNDS.cusum.h.min, BOUNDS.cusum.h.max)));
-
-      params.set(
-        "farringtonBaselineWeeks",
-        String(clampInt(farringtonBaselineWeeks, BOUNDS.farrington.baselineWeeks.min, BOUNDS.farrington.baselineWeeks.max))
-      );
-      params.set("farringtonZ", String(clampNum(farringtonZ, BOUNDS.farrington.z.min, BOUNDS.farrington.z.max)));
-    }
+    params.set(
+      "farringtonBaselineWeeks",
+      String(clampInt(farringtonBaselineWeeks, BOUNDS.farrington.baselineWeeks.min, BOUNDS.farrington.baselineWeeks.max))
+    );
+    params.set("farringtonZ", String(clampNum(farringtonZ, BOUNDS.farrington.z.min, BOUNDS.farrington.z.max)));
 
     return params;
   }
@@ -664,14 +640,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     return core;
   }
 
-  /* ======================================================
-     ✅ RUN (fixed)
-     ✅ What we changed to kill contradictions permanently:
-     1) Always send EXACT same params to run/report (scopeParams)
-     2) Add cache-bust param _ts for report
-     3) Force UI to use report.meta.consensus as "source of truth"
-        -> overwrites runData.consensus if report provides it
-     ====================================================== */
   async function runAnalysis() {
     const m = selectedMethods();
     if (!m.length) return;
@@ -731,18 +699,14 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       reportParams.set("testCode", String(testCode));
       reportParams.set("methods", m.join(","));
       reportParams.set("lang", lang);
-
-      // cache bust to avoid "looks like deploy didn't work"
       reportParams.set("_ts", String(Date.now()));
 
       const repJ = await fetchJSON(`${apiBase}/api/analytics/report?${reportParams.toString()}`, controller.signal);
 
-      // ✅ Get report text
       const extracted = extractReport(repJ?.data?.report, lang);
       const finalReport = (extracted?.trim() ? extracted : "").trim();
       setReportText(finalReport || t.insufficient);
 
-      // ✅ HARD FIX: source-of-truth consensus from REPORT meta
       const repConsensus = repJ?.data?.meta?.consensus || repJ?.data?.meta?.meta?.consensus || null;
       if (repConsensus) {
         setRunData((prev) => {
@@ -751,7 +715,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         });
       }
 
-      // health timestamp (optional)
       try {
         const hj = await fetchJSON(`${apiBase}/health`, controller.signal);
         setLastUpdated(hj?.time || hj?.timestamp || null);
@@ -772,22 +735,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     } catch {}
   }
 
-  function resetAdvancedToPreset() {
-    const p = PRESETS[preset] || PRESETS.standard;
-
-    setEwmaLambda(p.ewma.lambda);
-    setEwmaL(p.ewma.L);
-    setEwmaBaselineN(p.ewma.baselineN);
-
-    setCusumBaselineN(p.cusum.baselineN);
-    setCusumK(p.cusum.k);
-    setCusumH(p.cusum.h);
-
-    setFarringtonBaselineWeeks(p.farrington.baselineWeeks);
-    setFarringtonZ(p.farrington.z);
-  }
-
-  // ✅ Reset: يرجع الصفحة لوضع "قبل Run"
   function resetRun() {
     if (abortRef.current) {
       try {
@@ -803,14 +750,201 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     setShowDetails(false);
   }
 
-  // ✅ Uploads report loader
-  async function loadUploadsReport() {
+  function normalizeUploadsReport(apiData) {
+  const d = apiData || {};
+  // إذا جاء الملخص جاهز
+  if (d.totals || d.byTest || d.facilities || d.regions) return d;
+
+  // إذا جاء فقط uploads[] (مثل اللي أرسلته سابقاً)
+  const uploads = Array.isArray(d.uploads) ? d.uploads : [];
+
+  const totals = {
+    files: uploads.length,
+    tests: uploads.reduce((s, u) => s + Number(u?.totalTests || 0), 0),
+    facilities: new Set(uploads.flatMap((u) => u?.facilityIds || [])).size,
+    regions: new Set(uploads.flatMap((u) => u?.regionIds || [])).size,
+  };
+
+  // byTest: نجرب testsByCode إن وجد، وإلا نستنتج من اسم الملف (HB/WBC/CRP/PLT)
+  const byTestMap = new Map();
+  const guessTestCode = (name = "") => {
+    const s = String(name).toUpperCase();
+    if (s.includes("HB")) return "HB";
+    if (s.includes("WBC")) return "WBC";
+    if (s.includes("CRP")) return "CRP";
+    if (s.includes("PLT")) return "PLT";
+    return "UNKNOWN";
+  };
+
+  for (const u of uploads) {
+    const tbc = u?.testsByCode && typeof u.testsByCode === "object" ? u.testsByCode : null;
+    if (tbc && Object.keys(tbc).length) {
+      for (const [code, n] of Object.entries(tbc)) {
+        byTestMap.set(code, (byTestMap.get(code) || 0) + Number(n || 0));
+      }
+    } else {
+      const code = guessTestCode(u?.fileName);
+      byTestMap.set(code, (byTestMap.get(code) || 0) + Number(u?.totalTests || 0));
+    }
+  }
+
+  const byTest = Array.from(byTestMap.entries())
+    .map(([testCode, n]) => ({ testCode, n }))
+    .sort((a, b) => b.n - a.n);
+
+  // facilities summary
+  const facMap = new Map();
+  for (const u of uploads) {
+    const n = Number(u?.totalTests || 0);
+    for (const fid of u?.facilityIds || []) {
+      facMap.set(fid, (facMap.get(fid) || 0) + n);
+    }
+  }
+  const facilities = Array.from(facMap.entries())
+    .map(([facilityId, n]) => ({ facilityId, facilityName: "—", n }))
+    .sort((a, b) => b.n - a.n);
+
+  // regions summary
+  const regMap = new Map();
+  for (const u of uploads) {
+    const n = Number(u?.totalTests || 0);
+    for (const rid of u?.regionIds || []) {
+      regMap.set(rid, (regMap.get(rid) || 0) + n);
+    }
+  }
+  const regions = Array.from(regMap.entries())
+    .map(([regionId, n]) => ({ regionId, regionName: "—", n }))
+    .sort((a, b) => b.n - a.n);
+
+  return { totals, byTest, facilities, regions, uploads };
+}
+
+  // ✅ Uploads report loader (normalized)
+function normalizeUploadsSummary(payload) {
+  if (!payload) return null;
+
+  // الحالة A: summary shape
+  // payload = { uploadsCount, grandTotalTests, facilitiesCount, regionsCount, facilityIds, regionIds, testsByCode }
+  if (
+    typeof payload.uploadsCount === "number" ||
+    typeof payload.grandTotalTests === "number" ||
+    payload.testsByCode
+  ) {
+    const totals = {
+      files: payload.uploadsCount ?? 0,
+      tests: payload.grandTotalTests ?? 0,
+      facilities:
+        payload.facilitiesCount ??
+        (Array.isArray(payload.facilityIds) ? payload.facilityIds.length : 0),
+      regions:
+        payload.regionsCount ??
+        (Array.isArray(payload.regionIds) ? payload.regionIds.length : 0),
+    };
+
+    const byTest = payload.testsByCode
+      ? Object.entries(payload.testsByCode).map(([testCode, n]) => ({
+          testCode,
+          n: Number(n || 0),
+        }))
+      : [];
+
+    const facilities = Array.isArray(payload.facilityIds)
+      ? payload.facilityIds.map((facilityId) => ({
+          facilityId,
+          facilityName: "",
+          n: "",
+        }))
+      : [];
+
+    const regions = Array.isArray(payload.regionIds)
+      ? payload.regionIds.map((regionId) => ({
+          regionId,
+          regionName: "",
+          n: "",
+        }))
+      : [];
+
+    return { totals, byTest, facilities, regions };
+  }
+
+  // الحالة B: uploads list shape
+  // payload = { uploads: [...] }
+  if (Array.isArray(payload.uploads)) {
+    const uploads = payload.uploads;
+
+    const totals = uploads.reduce(
+      (acc, u) => {
+        acc.files += 1;
+        const t = Number(u.totalTests ?? u.rowsAccepted ?? 0);
+        acc.tests += Number.isFinite(t) ? t : 0;
+
+        (Array.isArray(u.facilityIds) ? u.facilityIds : []).forEach((id) => id && acc._fac.add(String(id)));
+        (Array.isArray(u.regionIds) ? u.regionIds : []).forEach((id) => id && acc._reg.add(String(id)));
+
+        const map = u.testsByCode && typeof u.testsByCode === "object" ? u.testsByCode : {};
+        for (const [k, v] of Object.entries(map)) {
+          const code = String(k).toUpperCase();
+          const n = Number(v || 0);
+          if (!Number.isFinite(n)) continue;
+          acc._byTest[code] = (acc._byTest[code] || 0) + n;
+        }
+        return acc;
+      },
+      { files: 0, tests: 0, _fac: new Set(), _reg: new Set(), _byTest: {} }
+    );
+
+    const byTest = Object.entries(totals._byTest)
+      .map(([testCode, n]) => ({ testCode, n }))
+      .sort((a, b) => b.n - a.n);
+
+    const facilities = Array.from(totals._fac).sort().map((facilityId) => ({
+      facilityId,
+      facilityName: "",
+      n: "",
+    }));
+
+    const regions = Array.from(totals._reg).sort().map((regionId) => ({
+      regionId,
+      regionName: "",
+      n: "",
+    }));
+
+    return {
+      totals: {
+        files: totals.files,
+        tests: totals.tests,
+        facilities: totals._fac.size,
+        regions: totals._reg.size,
+      },
+      byTest,
+      facilities,
+      regions,
+    };
+  }
+
+  return null;
+}
+
+async function loadUploadsReport() {
   setReportLoading(true);
   setReportErr("");
+
   try {
-    // ✅ Correct route based on your API "known" list
-    const j = await fetchJSON(`${apiBase}/api/report/uploads?ts=${Date.now()}`);
-    setReportData(j?.data || null);
+    // ✅ الأفضل دائمًا
+    let j = await fetchJSON(`${apiBase}/api/report/summary?ts=${Date.now()}`);
+
+    // لو رجع لكن بدون data لأي سبب
+    let normalized = normalizeUploadsSummary(j?.data);
+
+    // ✅ fallback حقيقي: نجيب uploads ونحسب منها
+    if (!normalized) {
+      const j2 = await fetchJSON(`${apiBase}/api/report/uploads?limit=200&skip=0&ts=${Date.now()}`);
+      normalized = normalizeUploadsSummary(j2?.data);
+    }
+
+    if (!normalized) throw new Error("No usable report data from API response.");
+
+    setReportData(normalized);
     setReportOpen(true);
   } catch (e) {
     setReportErr(String(e?.message || e));
@@ -821,22 +955,18 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   }
 }
 
+   
 
-  // ✅ Derived view model (only after runData exists)
-  const consensus = runData?.consensus;
 
-  // ✅ القرار الذي سيظهر في UI
-  const uiDecision = computeUiDecision(runData); // "info" | "watch" | "alert"
-  const decision = upper(uiDecision); // "INFO" | "WATCH" | "ALERT"
+  const uiDecision = computeUiDecision(runData);
+  const decision = upper(uiDecision);
 
   const theme = decisionTheme(decision);
   const decisionKey = theme.key;
 
-  // ✅ أسماء الطرق التي أعطت Alert فعلاً
   const methodAlerts = listMethodAlerts(runData);
 
   const weekly = runData?.meta?.weekly || runData?.meta?.meta?.weekly || runData?.weekly || null;
-
   const trendKey = computeTrendFromWeekly(weekly);
   const confidenceKey = computeConfidence(runData?.meta || runData?.meta?.meta || runData?.meta);
 
@@ -849,7 +979,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
   const trustMethods = methodsLabel(selectedMethods());
 
-  // ✅ dataset derived from lastUpload
   const dataset = lastUpload?.ok ? t.uploadOk : t.notAvailable;
 
   const ewCfg = adaptEWMA(chartsPayload?.ewma);
@@ -860,7 +989,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
   const canRunNow = !loading;
 
-  // stratification
   const profile = runData?.profile || null;
   const profileInsight = runData?.profileInsight || null;
 
@@ -910,7 +1038,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* Initiative + Disclaimer */}
         <div className="infoGrid">
           <div className="infoCard">
             <div className="infoCardTitle">{t.initiativeTitle}</div>
@@ -922,7 +1049,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* ✅ Upload (ONE professional place) */}
         <div style={{ marginTop: 14 }}>
           <UploadCsv
             lang={lang}
@@ -939,14 +1065,17 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           />
         </div>
 
-        {/* Scope */}
         <div className="formRow" style={{ marginTop: 12 }}>
           <div className="field">
             <label>{t.scope}</label>
-            <Dropdown dir={isRTL ? "rtl" : "ltr"} value={scopeMode} onChange={(v) => setScopeMode(v)} options={getScopeOptions(t)} />
+            <Dropdown
+              dir={isRTL ? "rtl" : "ltr"}
+              value={scopeMode}
+              onChange={(v) => setScopeMode(v)}
+              options={getScopeOptions(t)}
+            />
           </div>
 
-          {/* ✅ Reports button here */}
           <div className="actions" style={{ alignSelf: "end" }}>
             <button type="button" className="ghostBtn" onClick={loadUploadsReport} disabled={reportLoading}>
               {reportLoading ? "..." : lang === "ar" ? "تقرير الرفعات" : "Uploads Report"}
@@ -954,7 +1083,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* Facility/Region + Test */}
         <div className="formRow">
           {scopeMode === "facility" ? (
             <div className="field">
@@ -979,7 +1107,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* Signal (auto) + note */}
         <div className="formRow">
           <div className="field">
             <label>{t.signal}</label>
@@ -1005,7 +1132,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* Time filter + Preset */}
         <div className="formRow">
           <div className="field">
             <label>{t.timeFilter}</label>
@@ -1046,171 +1172,11 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               ]}
             />
             <div className="muted" style={{ marginTop: 8 }}>
-              {lang === "ar" ? "Preset الحالي" : "Current preset"}: <span className="tinyPill">{presetLabel}</span> •{" "}
-              {lang === "ar" ? "متقدمة" : "Advanced"}:{" "}
-              <span className="tinyPill">{advanced ? (lang === "ar" ? "نعم" : "Yes") : lang === "ar" ? "لا" : "No"}</span>
+              {lang === "ar" ? "Preset الحالي" : "Current preset"}: <span className="tinyPill">{presetLabel}</span>
             </div>
           </div>
         </div>
 
-        {/* Advanced Panel */}
-        <div
-          className="advWrap"
-          style={{
-            borderRadius: 14,
-            padding: 12,
-            background: "rgba(0,0,0,0.16)",
-            border: "1px solid rgba(255,255,255,0.10)",
-            marginTop: 10,
-          }}
-        >
-          <div className="advHeader" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <div>
-              <div className="advTitle" style={{ fontWeight: 950 }}>
-                {t.advanced}
-              </div>
-              <div className="muted">{t.advancedHint}</div>
-            </div>
-
-            <div className="actions">
-              <button type="button" className="ghostBtn" onClick={() => setAdvanced((s) => !s)} disabled={loading}>
-                {advanced ? t.advancedOff : t.advancedOn}
-              </button>
-
-              <button type="button" className="ghostBtn" onClick={resetAdvancedToPreset} disabled={loading}>
-                {t.resetToPreset}
-              </button>
-            </div>
-          </div>
-
-          {advanced ? (
-            <div
-              className="advGrid"
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, minmax(0,1fr))",
-                gap: 10,
-                marginTop: 10,
-              }}
-            >
-              <div
-                className="advCard"
-                style={{
-                  borderRadius: 14,
-                  padding: 10,
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.10)",
-                }}
-              >
-                <div className="advCardTitle" style={{ fontWeight: 950, marginBottom: 8 }}>
-                  {t.ewmaBlock}
-                </div>
-                <ParamSlider
-                  name={t.paramLambda}
-                  value={ewmaLambda}
-                  min={BOUNDS.ewma.lambda.min}
-                  max={BOUNDS.ewma.lambda.max}
-                  step={0.01}
-                  onChange={(v) => setEwmaLambda(clampNum(v, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max))}
-                  hint={t.hintLambda}
-                />
-                <ParamSlider
-                  name={t.paramL}
-                  value={ewmaL}
-                  min={BOUNDS.ewma.L.min}
-                  max={BOUNDS.ewma.L.max}
-                  step={0.1}
-                  onChange={(v) => setEwmaL(clampNum(v, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max))}
-                  hint={t.hintL}
-                />
-                <ParamSlider
-                  name={t.paramEwmaBaselineN}
-                  value={ewmaBaselineN}
-                  min={BOUNDS.ewma.baselineN.min}
-                  max={BOUNDS.ewma.baselineN.max}
-                  step={1}
-                  onChange={(v) => setEwmaBaselineN(clampInt(v, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max))}
-                  hint={t.hintBaselineN}
-                />
-              </div>
-
-              <div
-                className="advCard"
-                style={{
-                  borderRadius: 14,
-                  padding: 10,
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.10)",
-                }}
-              >
-                <div className="advCardTitle" style={{ fontWeight: 950, marginBottom: 8 }}>
-                  {t.cusumBlock}
-                </div>
-                <ParamSlider
-                  name={t.paramCusumBaselineN}
-                  value={cusumBaselineN}
-                  min={BOUNDS.cusum.baselineN.min}
-                  max={BOUNDS.cusum.baselineN.max}
-                  step={1}
-                  onChange={(v) => setCusumBaselineN(clampInt(v, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max))}
-                  hint={t.hintBaselineN}
-                />
-                <ParamSlider
-                  name={t.paramK}
-                  value={cusumK}
-                  min={BOUNDS.cusum.k.min}
-                  max={BOUNDS.cusum.k.max}
-                  step={0.01}
-                  onChange={(v) => setCusumK(clampNum(v, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max))}
-                  hint={t.hintK}
-                />
-                <ParamSlider
-                  name={t.paramH}
-                  value={cusumH}
-                  min={BOUNDS.cusum.h.min}
-                  max={BOUNDS.cusum.h.max}
-                  step={0.1}
-                  onChange={(v) => setCusumH(clampNum(v, BOUNDS.cusum.h.min, BOUNDS.cusum.h.max))}
-                  hint={t.hintH}
-                />
-              </div>
-
-              <div
-                className="advCard"
-                style={{
-                  borderRadius: 14,
-                  padding: 10,
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.10)",
-                }}
-              >
-                <div className="advCardTitle" style={{ fontWeight: 950, marginBottom: 8 }}>
-                  {t.farringtonBlock}
-                </div>
-                <ParamSlider
-                  name={t.paramFarrBaseline}
-                  value={farringtonBaselineWeeks}
-                  min={BOUNDS.farrington.baselineWeeks.min}
-                  max={BOUNDS.farrington.baselineWeeks.max}
-                  step={1}
-                  onChange={(v) => setFarringtonBaselineWeeks(clampInt(v, BOUNDS.farrington.baselineWeeks.min, BOUNDS.farrington.baselineWeeks.max))}
-                  hint={t.hintFarrBaseline}
-                />
-                <ParamSlider
-                  name={t.paramZ}
-                  value={farringtonZ}
-                  min={BOUNDS.farrington.z.min}
-                  max={BOUNDS.farrington.z.max}
-                  step={0.05}
-                  onChange={(v) => setFarringtonZ(clampNum(v, BOUNDS.farrington.z.min, BOUNDS.farrington.z.max))}
-                  hint={t.hintZ}
-                />
-              </div>
-            </div>
-          ) : null}
-        </div>
-
-        {/* Methods + Actions */}
         <div className="methodRow" style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 6 }}>
           <div className="field" style={{ flex: 1 }}>
             <label>{t.methods}</label>
@@ -1221,11 +1187,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               <button type="button" className={`chipBtn ${methods.cusum ? "chipBtnOn" : ""}`} onClick={() => toggleMethod("cusum")}>
                 CUSUM
               </button>
-              <button
-                type="button"
-                className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""}`}
-                onClick={() => toggleMethod("farrington")}
-              >
+              <button type="button" className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""}`} onClick={() => toggleMethod("farrington")}>
                 Farrington
               </button>
             </div>
@@ -1237,7 +1199,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               className="dangerBtn"
               onClick={() => {
                 setPreset("high");
-                setAdvanced(false);
               }}
               disabled={loading}
             >
@@ -1258,7 +1219,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* Errors */}
         {errMsg ? (
           <div className="muted" style={{ marginTop: 10 }}>
             {t.error} {safeText(errMsg)}
@@ -1270,7 +1230,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         ) : null}
 
-        {/* Trust / metadata */}
         <div className="miniGrid">
           <div className="mini">
             <div className="miniRow">
@@ -1296,7 +1255,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         </div>
       </section>
 
-      {/* ✅ النتائج مخفية بالكامل قبل Run */}
       {runData ? (
         <section className="grid">
           <div className="card cardWide" style={{ padding: 0, background: "transparent", border: "0" }}>
@@ -1373,7 +1331,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                     <b>{t.actions}</b> — {actionsText}
                   </div>
 
-                  {/* ✅ explain single-method alerts */}
                   {methodAlerts?.length ? (
                     <div style={{ marginTop: 2 }}>
                       <b>{lang === "ar" ? "ملاحظة:" : "Note:"}</b>{" "}
@@ -1393,7 +1350,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             </div>
           </div>
 
-          {/* Technical details are hidden by default */}
           {showDetails ? (
             <>
               <div className="card cardWide">
@@ -1411,7 +1367,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 </div>
               </div>
 
-              {/* Population Stratification */}
               <div className="card cardWide">
                 <div className="cardHeader">
                   <div className="cardTitle">{t.strat}</div>
@@ -1439,20 +1394,11 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                     <div className="stratGrid">
                       <StratCard title={t.bySex} items={profile?.bySex || []} getKey={(it) => keyLabelSex(it?.sex)} t={t} />
                       <StratCard title={t.byAge} items={profile?.byAge || []} getKey={(it) => safeLabel(it?.ageBand)} t={t} />
-                      <StratCard
-                        title={t.byNationality}
-                        items={profile?.byNationality || []}
-                        getKey={(it) => safeLabel(it?.nationality)}
-                        t={t}
-                      />
+                      <StratCard title={t.byNationality} items={profile?.byNationality || []} getKey={(it) => safeLabel(it?.nationality)} t={t} />
                     </div>
 
                     {insightText ? (
-                      <div
-                        className="reportBox2"
-                        style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }}
-                        dir={isRTL ? "rtl" : "ltr"}
-                      >
+                      <div className="reportBox2" style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }} dir={isRTL ? "rtl" : "ltr"}>
                         {insightText}
                       </div>
                     ) : null}
@@ -1460,17 +1406,12 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 )}
               </div>
 
-              {/* Narrative report */}
               <div className="card cardWide">
                 <div className="cardHeader">
                   <div className="cardTitle">{t.narrative}</div>
                 </div>
 
-                <div
-                  className="reportBox2"
-                  dir={isRTL ? "rtl" : "ltr"}
-                  style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: 12, borderRadius: 12, minHeight: 180 }}
-                >
+                <div className="reportBox2" dir={isRTL ? "rtl" : "ltr"} style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: 12, borderRadius: 12, minHeight: 180 }}>
                   {reportText || t.empty}
                 </div>
 
@@ -1481,7 +1422,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         </section>
       ) : null}
 
-      {/* ✅ Uploads Report Modal */}
+      {/* ✅ Uploads Report Modal (FIXED to show data.uploads) */}
       {reportOpen ? (
         <div className="modalOverlay" onMouseDown={() => setReportOpen(false)}>
           <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
@@ -1489,7 +1430,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               <div>
                 <div className="modalTitle">{lang === "ar" ? "تقرير الرفعات" : "Uploads Report"}</div>
                 <div className="muted" style={{ marginTop: 6 }}>
-                  {lang === "ar" ? "ملخص الملفات والمرافق والمناطق وعدد الفحوصات حسب كل فحص." : "Summary of uploads, facilities, regions, and counts per test."}
+                  {lang === "ar" ? "قائمة الملفات المرفوعة (كما وصلت من الخادم)." : "List of uploaded files (as returned by the API)."}
                 </div>
               </div>
               <button className="ghostBtn" onClick={() => setReportOpen(false)}>
@@ -1500,102 +1441,43 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             <div className="modalBody">
               {reportErr ? <div className="muted">{reportErr}</div> : null}
 
-              {!reportErr && !reportData ? <div className="muted">{lang === "ar" ? "لا توجد بيانات." : "No data."}</div> : null}
+              {!reportErr && reportLoading ? <div className="muted">{lang === "ar" ? "جاري التحميل..." : "Loading..."}</div> : null}
 
-              {reportData?.totals ? (
-                <div className="mini" style={{ marginBottom: 12 }}>
-                  <div className="miniRow">
-                    <div className="miniKey">{lang === "ar" ? "عدد الملفات" : "Files"}</div>
-                    <div className="miniVal">{reportData.totals.files}</div>
-                  </div>
-                  <div className="miniRow">
-                    <div className="miniKey">{lang === "ar" ? "إجمالي الفحوصات" : "Total tests"}</div>
-                    <div className="miniVal">{reportData.totals.tests}</div>
-                  </div>
-                  <div className="miniRow">
-                    <div className="miniKey">{lang === "ar" ? "عدد المرافق" : "Facilities"}</div>
-                    <div className="miniVal">{reportData.totals.facilities}</div>
-                  </div>
-                  <div className="miniRow">
-                    <div className="miniKey">{lang === "ar" ? "عدد المناطق" : "Regions"}</div>
-                    <div className="miniVal">{reportData.totals.regions}</div>
-                  </div>
-                </div>
+              {!reportErr && !reportLoading && !reportData ? (
+                <div className="muted">{lang === "ar" ? "لا توجد بيانات." : "No data."}</div>
               ) : null}
 
-              {Array.isArray(reportData?.byTest) && reportData.byTest.length ? (
+              {Array.isArray(reportData?.uploads) && reportData.uploads.length ? (
                 <>
-                  <div className="cardTitle" style={{ marginBottom: 8 }}>
-                    {lang === "ar" ? "حسب الفحص" : "By test"}
+                  <div className="mini" style={{ marginBottom: 12 }}>
+                    <div className="miniRow">
+                      <div className="miniKey">{lang === "ar" ? "عدد الملفات" : "Files"}</div>
+                      <div className="miniVal">{reportData.uploads.length}</div>
+                    </div>
                   </div>
+
                   <table className="table">
                     <thead>
                       <tr>
-                        <th>{lang === "ar" ? "الفحص" : "Test"}</th>
-                        <th>{lang === "ar" ? "العدد" : "Count"}</th>
+                        <th>{lang === "ar" ? "الملف" : "File"}</th>
+                        <th>{lang === "ar" ? "الفحوصات" : "Tests"}</th>
+                        <th>{lang === "ar" ? "مقبول/مرفوض" : "Accepted/Rejected"}</th>
+                        <th>{lang === "ar" ? "المرافق" : "Facilities"}</th>
+                        <th>{lang === "ar" ? "المناطق" : "Regions"}</th>
+                        <th>{lang === "ar" ? "التاريخ" : "Date"}</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {reportData.byTest.slice(0, 200).map((r, idx) => (
+                      {reportData.uploads.slice(0, 200).map((u, idx) => (
                         <tr key={idx}>
-                          <td>{r.testCode}</td>
-                          <td>{r.n}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </>
-              ) : null}
-
-              <div style={{ height: 12 }} />
-
-              {Array.isArray(reportData?.facilities) && reportData.facilities.length ? (
-                <>
-                  <div className="cardTitle" style={{ marginBottom: 8 }}>
-                    {lang === "ar" ? "المرافق" : "Facilities"}
-                  </div>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>{lang === "ar" ? "رمز المرفق" : "Facility ID"}</th>
-                        <th>{lang === "ar" ? "اسم المرفق" : "Facility name"}</th>
-                        <th>{lang === "ar" ? "عدد الفحوصات" : "Tests"}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {reportData.facilities.slice(0, 200).map((r, idx) => (
-                        <tr key={idx}>
-                          <td>{r.facilityId}</td>
-                          <td>{r.facilityName || "—"}</td>
-                          <td>{r.n}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </>
-              ) : null}
-
-              <div style={{ height: 12 }} />
-
-              {Array.isArray(reportData?.regions) && reportData.regions.length ? (
-                <>
-                  <div className="cardTitle" style={{ marginBottom: 8 }}>
-                    {lang === "ar" ? "المناطق" : "Regions"}
-                  </div>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>{lang === "ar" ? "رمز المنطقة" : "Region ID"}</th>
-                        <th>{lang === "ar" ? "اسم المنطقة" : "Region name"}</th>
-                        <th>{lang === "ar" ? "عدد الفحوصات" : "Tests"}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {reportData.regions.slice(0, 200).map((r, idx) => (
-                        <tr key={idx}>
-                          <td>{r.regionId}</td>
-                          <td>{r.regionName || "—"}</td>
-                          <td>{r.n}</td>
+                          <td style={{ maxWidth: 340, wordBreak: "break-word" }}>{u.fileName || "—"}</td>
+                          <td>{u.totalTests ?? u.rowsAccepted ?? "—"}</td>
+                          <td>
+                            {(u.rowsAccepted ?? "—")} / {(u.rowsRejected ?? "—")}
+                          </td>
+                          <td>{Array.isArray(u.facilityIds) ? u.facilityIds.length : "—"}</td>
+                          <td>{Array.isArray(u.regionIds) ? u.regionIds.length : "—"}</td>
+                          <td>{u.createdAt ? new Date(u.createdAt).toLocaleString() : "—"}</td>
                         </tr>
                       ))}
                     </tbody>
