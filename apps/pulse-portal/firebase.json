@@ -11,8 +11,14 @@
       }
     ],
     "rewrites": [
-      { "source": "/api/**", "destination": "https://pulse-api-857293120102.europe-west1.run.app" },
-      { "source": "**", "destination": "/index.html" }
+      {
+        "source": "/api/**",
+        "destination": "https://pulse-api-857293120102.europe-west1.run.app/"
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
     ]
   }
 }

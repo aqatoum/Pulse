@@ -1,5 +1,6 @@
 const express = require("express");
-const Upload = require("../models/upload.model");
+const Upload = require("../models/Upload")
+
 
 const router = express.Router();
 
