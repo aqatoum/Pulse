@@ -37,4 +37,5 @@ const UploadSchema = new mongoose.Schema(
 
 UploadSchema.index({ uploadedAt: -1 });
 
-module.exports = mongoose.model("Upload", UploadSchema);
+// ✅ prevents OverwriteModelError on Cloud Run
+module.exports = mongoose.models.Upload || mongoose.model("Upload", UploadSchema);
