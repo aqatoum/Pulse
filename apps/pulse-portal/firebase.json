@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "public": "apps/pulse-portal/dist",
+    "public": "dist",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "headers": [
       {
@@ -11,14 +11,8 @@
       }
     ],
     "rewrites": [
-      {
-        "source": "/api/**",
-        "destination": "https://pulse-482504.web.app/"
-      },
-      {
-        "source": "**",
-        "destination": "/index.html"
-      }
+      { "source": "/api/**", "destination": "https://pulse-api-857293120102.europe-west1.run.app" },
+      { "source": "**", "destination": "/index.html" }
     ]
   }
 }
