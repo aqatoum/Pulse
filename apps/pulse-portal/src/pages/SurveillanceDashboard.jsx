@@ -244,7 +244,7 @@ const styles = `
     background: linear-gradient(90deg, rgba(16,185,129,0.95), rgba(245,158,11,0.92), rgba(239,68,68,0.92));
   }
 
-  /* Modal (✅ FIXED for overflow + scroll) */
+  /* Modal */
   .modalOverlay{
     position: fixed;
     inset: 0;
@@ -255,25 +255,26 @@ const styles = `
     justify-content:center;
     padding: 16px;
     z-index: 9999;
-
-    /* مهم جدًا: لو المحتوى أكبر من الشاشة، نخلي الـ overlay نفسه قابل للسكرول */
-    overflow-y: auto;
   }
   .modal{
-    width: min(980px, 100%);
-    border-radius: 18px;
-    background: rgba(12,18,32,0.92);
-    border: 1px solid rgba(255,255,255,0.14);
-    box-shadow: 0 18px 60px rgba(0,0,0,0.45);
-    overflow:hidden;
+  width: min(1100px, 100%);
+  max-height: calc(100vh - 32px);   /* ✅ prevent overflow outside screen */
+  border-radius: 18px;
+  background: rgba(12,18,32,0.92);
+  border: 1px solid rgba(255,255,255,0.14);
+  box-shadow: 0 18px 60px rgba(0,0,0,0.45);
+  overflow:hidden;
+  display:flex;
+  flex-direction: column;          /* ✅ header fixed, body scrolls */
+}
 
-    /* مهم جدًا: لا تتجاوز ارتفاع الشاشة */
-    max-height: calc(100vh - 32px);
+.modalBody{
+  padding: 14px 16px;
+  overflow: auto;                  /* ✅ scroll inside */
+  max-height: calc(100vh - 120px); /* ✅ leaves room for header */
+  -webkit-overflow-scrolling: touch;
+}
 
-    /* هيكل عمودي حتى يكون body هو اللي يسكروُل */
-    display: flex;
-    flex-direction: column;
-  }
   .modalHeader{
     display:flex;
     justify-content:space-between;
@@ -281,16 +282,9 @@ const styles = `
     align-items:flex-start;
     padding: 14px 16px;
     border-bottom: 1px solid rgba(255,255,255,0.10);
-    flex: 0 0 auto;
   }
   .modalTitle{ font-weight: 950; }
-  .modalBody{
-    padding: 14px 16px;
-
-    /* ✅ السكروُل الحقيقي هنا */
-    overflow-y: auto;
-    flex: 1 1 auto;
-  }
+  .modalBody{ padding: 14px 16px; }
   .table{
     width: 100%;
     border-collapse: collapse;
@@ -392,6 +386,9 @@ function decisionTheme(decisionUpper) {
 
 /* =========================
    ✅ UI Decision Logic
+   ✅ IMPORTANT CHANGE:
+   - We now "lock" UI status to REPORT consensus if available
+   - because report & run must never contradict.
    ========================= */
 function normDecision(x) {
   const v = String(x || "").toLowerCase();
@@ -501,23 +498,6 @@ function StratCard({ title, items, getKey, t }) {
 }
 
 /* =========================
-   ✅ Helpers (Uploads Report)
-   ========================= */
-function fmtBytes(bytes) {
-  const n = Number(bytes || 0);
-  if (!Number.isFinite(n) || n <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let v = n;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  const s = i === 0 ? String(Math.round(v)) : String(Math.round(v * 10) / 10);
-  return `${s} ${units[i]}`;
-}
-
-/* =========================
    ✅ Page
    ========================= */
 export default function SurveillanceDashboard({ lang = "en" }) {
@@ -600,16 +580,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
   const abortRef = useRef(null);
 
-  // ✅ Lock page scroll when modal is open (nice UX)
-  useEffect(() => {
-    if (!reportOpen) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [reportOpen]);
-
   useEffect(() => {
     let cancelled = false;
     async function loadHealth() {
@@ -661,9 +631,15 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
       params.set("ewmaLambda", String(clampNum(ewmaLambda, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max)));
       params.set("ewmaL", String(clampNum(ewmaL, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max)));
-      params.set("ewmaBaselineN", String(clampInt(ewmaBaselineN, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max)));
+      params.set(
+        "ewmaBaselineN",
+        String(clampInt(ewmaBaselineN, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max))
+      );
 
-      params.set("cusumBaselineN", String(clampInt(cusumBaselineN, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max)));
+      params.set(
+        "cusumBaselineN",
+        String(clampInt(cusumBaselineN, BOUNDS.cusum.baselineN.min, BOUNDS.cusum.baselineN.max))
+      );
       params.set("cusumK", String(clampNum(cusumK, BOUNDS.cusum.k.min, BOUNDS.cusum.k.max)));
       params.set("cusumH", String(clampNum(cusumH, BOUNDS.cusum.h.min, BOUNDS.cusum.h.max)));
 
@@ -689,7 +665,12 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   }
 
   /* ======================================================
-     ✅ RUN
+     ✅ RUN (fixed)
+     ✅ What we changed to kill contradictions permanently:
+     1) Always send EXACT same params to run/report (scopeParams)
+     2) Add cache-bust param _ts for report
+     3) Force UI to use report.meta.consensus as "source of truth"
+        -> overwrites runData.consensus if report provides it
      ====================================================== */
   async function runAnalysis() {
     const m = selectedMethods();
@@ -750,14 +731,18 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       reportParams.set("testCode", String(testCode));
       reportParams.set("methods", m.join(","));
       reportParams.set("lang", lang);
+
+      // cache bust to avoid "looks like deploy didn't work"
       reportParams.set("_ts", String(Date.now()));
 
       const repJ = await fetchJSON(`${apiBase}/api/analytics/report?${reportParams.toString()}`, controller.signal);
 
+      // ✅ Get report text
       const extracted = extractReport(repJ?.data?.report, lang);
       const finalReport = (extracted?.trim() ? extracted : "").trim();
       setReportText(finalReport || t.insufficient);
 
+      // ✅ HARD FIX: source-of-truth consensus from REPORT meta
       const repConsensus = repJ?.data?.meta?.consensus || repJ?.data?.meta?.meta?.consensus || null;
       if (repConsensus) {
         setRunData((prev) => {
@@ -766,6 +751,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         });
       }
 
+      // health timestamp (optional)
       try {
         const hj = await fetchJSON(`${apiBase}/health`, controller.signal);
         setLastUpdated(hj?.time || hj?.timestamp || null);
@@ -801,6 +787,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     setFarringtonZ(p.farrington.z);
   }
 
+  // ✅ Reset: يرجع الصفحة لوضع "قبل Run"
   function resetRun() {
     if (abortRef.current) {
       try {
@@ -816,37 +803,36 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     setShowDetails(false);
   }
 
-  /* ======================================================
-     ✅ Uploads report loader (FIXED)
-     - correct endpoint: /api/uploads/report
-     - store whole response: reportData = j (not j.data)
-     ====================================================== */
+  // ✅ Uploads report loader
   async function loadUploadsReport() {
-    setReportLoading(true);
-    setReportErr("");
-    try {
-      const j = await fetchJSON(`${apiBase}/api/uploads/report?_ts=${Date.now()}`);
-      if (!j?.ok) throw new Error(j?.error || "Failed to load uploads report");
-      setReportData(j);
-      setReportOpen(true);
-    } catch (e) {
-      setReportErr(String(e?.message || e));
-      setReportData(null);
-      setReportOpen(true);
-    } finally {
-      setReportLoading(false);
-    }
+  setReportLoading(true);
+  setReportErr("");
+  try {
+    // ✅ Correct route based on your API "known" list
+    const j = await fetchJSON(`${apiBase}/api/report/uploads?ts=${Date.now()}`);
+    setReportData(j?.data || null);
+    setReportOpen(true);
+  } catch (e) {
+    setReportErr(String(e?.message || e));
+    setReportData(null);
+    setReportOpen(true);
+  } finally {
+    setReportLoading(false);
   }
+}
+
 
   // ✅ Derived view model (only after runData exists)
   const consensus = runData?.consensus;
 
-  const uiDecision = computeUiDecision(runData);
-  const decision = upper(uiDecision);
+  // ✅ القرار الذي سيظهر في UI
+  const uiDecision = computeUiDecision(runData); // "info" | "watch" | "alert"
+  const decision = upper(uiDecision); // "INFO" | "WATCH" | "ALERT"
 
   const theme = decisionTheme(decision);
   const decisionKey = theme.key;
 
+  // ✅ أسماء الطرق التي أعطت Alert فعلاً
   const methodAlerts = listMethodAlerts(runData);
 
   const weekly = runData?.meta?.weekly || runData?.meta?.meta?.weekly || runData?.weekly || null;
@@ -863,6 +849,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
   const trustMethods = methodsLabel(selectedMethods());
 
+  // ✅ dataset derived from lastUpload
   const dataset = lastUpload?.ok ? t.uploadOk : t.notAvailable;
 
   const ewCfg = adaptEWMA(chartsPayload?.ewma);
@@ -909,13 +896,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       ? "لا يوجد إجراء عاجل. الاستمرار في الرصد ورفع العينة لتحسين الثقة."
       : "No urgent action. Continue monitoring and grow sample size to improve confidence.";
   })();
-
-  // ✅ Derived for uploads modal
-  const uploadsTotals = reportData?.totals || null;
-  const uploadsFiles = Array.isArray(reportData?.files) ? reportData.files : [];
-  const uploadsTestsByCode = Array.isArray(reportData?.testsByCode) ? reportData.testsByCode : [];
-  const uploadsByFacility = Array.isArray(reportData?.byFacility) ? reportData.byFacility : [];
-  const uploadsByRegion = Array.isArray(reportData?.byRegion) ? reportData.byRegion : [];
 
   return (
     <div className="dash" dir={isRTL ? "rtl" : "ltr"}>
@@ -1213,9 +1193,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   min={BOUNDS.farrington.baselineWeeks.min}
                   max={BOUNDS.farrington.baselineWeeks.max}
                   step={1}
-                  onChange={(v) =>
-                    setFarringtonBaselineWeeks(clampInt(v, BOUNDS.farrington.baselineWeeks.min, BOUNDS.farrington.baselineWeeks.max))
-                  }
+                  onChange={(v) => setFarringtonBaselineWeeks(clampInt(v, BOUNDS.farrington.baselineWeeks.min, BOUNDS.farrington.baselineWeeks.max))}
                   hint={t.hintFarrBaseline}
                 />
                 <ParamSlider
@@ -1243,7 +1221,11 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               <button type="button" className={`chipBtn ${methods.cusum ? "chipBtnOn" : ""}`} onClick={() => toggleMethod("cusum")}>
                 CUSUM
               </button>
-              <button type="button" className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""}`} onClick={() => toggleMethod("farrington")}>
+              <button
+                type="button"
+                className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""}`}
+                onClick={() => toggleMethod("farrington")}
+              >
                 Farrington
               </button>
             </div>
@@ -1391,6 +1373,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                     <b>{t.actions}</b> — {actionsText}
                   </div>
 
+                  {/* ✅ explain single-method alerts */}
                   {methodAlerts?.length ? (
                     <div style={{ marginTop: 2 }}>
                       <b>{lang === "ar" ? "ملاحظة:" : "Note:"}</b>{" "}
@@ -1410,6 +1393,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             </div>
           </div>
 
+          {/* Technical details are hidden by default */}
           {showDetails ? (
             <>
               <div className="card cardWide">
@@ -1427,6 +1411,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 </div>
               </div>
 
+              {/* Population Stratification */}
               <div className="card cardWide">
                 <div className="cardHeader">
                   <div className="cardTitle">{t.strat}</div>
@@ -1454,11 +1439,20 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                     <div className="stratGrid">
                       <StratCard title={t.bySex} items={profile?.bySex || []} getKey={(it) => keyLabelSex(it?.sex)} t={t} />
                       <StratCard title={t.byAge} items={profile?.byAge || []} getKey={(it) => safeLabel(it?.ageBand)} t={t} />
-                      <StratCard title={t.byNationality} items={profile?.byNationality || []} getKey={(it) => safeLabel(it?.nationality)} t={t} />
+                      <StratCard
+                        title={t.byNationality}
+                        items={profile?.byNationality || []}
+                        getKey={(it) => safeLabel(it?.nationality)}
+                        t={t}
+                      />
                     </div>
 
                     {insightText ? (
-                      <div className="reportBox2" style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }} dir={isRTL ? "rtl" : "ltr"}>
+                      <div
+                        className="reportBox2"
+                        style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }}
+                        dir={isRTL ? "rtl" : "ltr"}
+                      >
                         {insightText}
                       </div>
                     ) : null}
@@ -1466,12 +1460,17 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 )}
               </div>
 
+              {/* Narrative report */}
               <div className="card cardWide">
                 <div className="cardHeader">
                   <div className="cardTitle">{t.narrative}</div>
                 </div>
 
-                <div className="reportBox2" dir={isRTL ? "rtl" : "ltr"} style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: 12, borderRadius: 12, minHeight: 180 }}>
+                <div
+                  className="reportBox2"
+                  dir={isRTL ? "rtl" : "ltr"}
+                  style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: 12, borderRadius: 12, minHeight: 180 }}
+                >
                   {reportText || t.empty}
                 </div>
 
@@ -1482,7 +1481,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         </section>
       ) : null}
 
-      {/* ✅ Uploads Report Modal (FIXED + Professional) */}
+      {/* ✅ Uploads Report Modal */}
       {reportOpen ? (
         <div className="modalOverlay" onMouseDown={() => setReportOpen(false)}>
           <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
@@ -1490,9 +1489,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               <div>
                 <div className="modalTitle">{lang === "ar" ? "تقرير الرفعات" : "Uploads Report"}</div>
                 <div className="muted" style={{ marginTop: 6 }}>
-                  {lang === "ar"
-                    ? "ملخص عدد الملفات، الفحوصات، والتجميع حسب الفحص والمرفق والمنطقة."
-                    : "Summary of uploads, tests, and breakdowns by test, facility, and region."}
+                  {lang === "ar" ? "ملخص الملفات والمرافق والمناطق وعدد الفحوصات حسب كل فحص." : "Summary of uploads, facilities, regions, and counts per test."}
                 </div>
               </div>
               <button className="ghostBtn" onClick={() => setReportOpen(false)}>
@@ -1502,30 +1499,34 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
             <div className="modalBody">
               {reportErr ? <div className="muted">{reportErr}</div> : null}
+
               {!reportErr && !reportData ? <div className="muted">{lang === "ar" ? "لا توجد بيانات." : "No data."}</div> : null}
 
-              {uploadsTotals ? (
+              {reportData?.totals ? (
                 <div className="mini" style={{ marginBottom: 12 }}>
                   <div className="miniRow">
                     <div className="miniKey">{lang === "ar" ? "عدد الملفات" : "Files"}</div>
-                    <div className="miniVal">{uploadsTotals.uploads ?? 0}</div>
+                    <div className="miniVal">{reportData.totals.files}</div>
                   </div>
                   <div className="miniRow">
                     <div className="miniKey">{lang === "ar" ? "إجمالي الفحوصات" : "Total tests"}</div>
-                    <div className="miniVal">{uploadsTotals.totalTests ?? 0}</div>
+                    <div className="miniVal">{reportData.totals.tests}</div>
                   </div>
                   <div className="miniRow">
-                    <div className="miniKey">{lang === "ar" ? "إجمالي الحجم" : "Total size"}</div>
-                    <div className="miniVal">{fmtBytes(uploadsTotals.totalSizeBytes ?? 0)}</div>
+                    <div className="miniKey">{lang === "ar" ? "عدد المرافق" : "Facilities"}</div>
+                    <div className="miniVal">{reportData.totals.facilities}</div>
+                  </div>
+                  <div className="miniRow">
+                    <div className="miniKey">{lang === "ar" ? "عدد المناطق" : "Regions"}</div>
+                    <div className="miniVal">{reportData.totals.regions}</div>
                   </div>
                 </div>
               ) : null}
 
-              {/* By test */}
-              {uploadsTestsByCode.length ? (
+              {Array.isArray(reportData?.byTest) && reportData.byTest.length ? (
                 <>
                   <div className="cardTitle" style={{ marginBottom: 8 }}>
-                    {lang === "ar" ? "حسب الفحص (Top 50)" : "By test (Top 50)"}
+                    {lang === "ar" ? "حسب الفحص" : "By test"}
                   </div>
                   <table className="table">
                     <thead>
@@ -1535,10 +1536,10 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {uploadsTestsByCode.slice(0, 50).map((r, idx) => (
+                      {reportData.byTest.slice(0, 200).map((r, idx) => (
                         <tr key={idx}>
                           <td>{r.testCode}</td>
-                          <td>{r.count}</td>
+                          <td>{r.n}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1548,26 +1549,25 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
               <div style={{ height: 12 }} />
 
-              {/* Facilities */}
-              {uploadsByFacility.length ? (
+              {Array.isArray(reportData?.facilities) && reportData.facilities.length ? (
                 <>
                   <div className="cardTitle" style={{ marginBottom: 8 }}>
-                    {lang === "ar" ? "المرافق (Top 50)" : "Facilities (Top 50)"}
+                    {lang === "ar" ? "المرافق" : "Facilities"}
                   </div>
                   <table className="table">
                     <thead>
                       <tr>
                         <th>{lang === "ar" ? "رمز المرفق" : "Facility ID"}</th>
-                        <th>{lang === "ar" ? "عدد الرفعات" : "Uploads"}</th>
+                        <th>{lang === "ar" ? "اسم المرفق" : "Facility name"}</th>
                         <th>{lang === "ar" ? "عدد الفحوصات" : "Tests"}</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {uploadsByFacility.slice(0, 50).map((r, idx) => (
+                      {reportData.facilities.slice(0, 200).map((r, idx) => (
                         <tr key={idx}>
                           <td>{r.facilityId}</td>
-                          <td>{r.uploads}</td>
-                          <td>{r.totalTests}</td>
+                          <td>{r.facilityName || "—"}</td>
+                          <td>{r.n}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1577,61 +1577,25 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
               <div style={{ height: 12 }} />
 
-              {/* Regions */}
-              {uploadsByRegion.length ? (
+              {Array.isArray(reportData?.regions) && reportData.regions.length ? (
                 <>
                   <div className="cardTitle" style={{ marginBottom: 8 }}>
-                    {lang === "ar" ? "المناطق (Top 50)" : "Regions (Top 50)"}
+                    {lang === "ar" ? "المناطق" : "Regions"}
                   </div>
                   <table className="table">
                     <thead>
                       <tr>
                         <th>{lang === "ar" ? "رمز المنطقة" : "Region ID"}</th>
-                        <th>{lang === "ar" ? "عدد الرفعات" : "Uploads"}</th>
+                        <th>{lang === "ar" ? "اسم المنطقة" : "Region name"}</th>
                         <th>{lang === "ar" ? "عدد الفحوصات" : "Tests"}</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {uploadsByRegion.slice(0, 50).map((r, idx) => (
+                      {reportData.regions.slice(0, 200).map((r, idx) => (
                         <tr key={idx}>
                           <td>{r.regionId}</td>
-                          <td>{r.uploads}</td>
-                          <td>{r.totalTests}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </>
-              ) : null}
-
-              <div style={{ height: 12 }} />
-
-              {/* Files list (optional but useful) */}
-              {uploadsFiles.length ? (
-                <>
-                  <div className="cardTitle" style={{ marginBottom: 8 }}>
-                    {lang === "ar" ? "الملفات (آخر 50)" : "Files (Latest 50)"}
-                  </div>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>{lang === "ar" ? "التاريخ" : "Date"}</th>
-                        <th>{lang === "ar" ? "اسم الملف" : "File"}</th>
-                        <th>{lang === "ar" ? "مرفق" : "Facility"}</th>
-                        <th>{lang === "ar" ? "منطقة" : "Region"}</th>
-                        <th>{lang === "ar" ? "فحوصات" : "Tests"}</th>
-                        <th>{lang === "ar" ? "الحجم" : "Size"}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {uploadsFiles.slice(0, 50).map((f, idx) => (
-                        <tr key={idx}>
-                          <td>{f?.createdAt ? String(f.createdAt).slice(0, 19).replace("T", " ") : "—"}</td>
-                          <td>{f?.originalName || f?.storedName || "—"}</td>
-                          <td>{f?.facilityId || "—"}</td>
-                          <td>{f?.regionId || "—"}</td>
-                          <td>{Number(f?.totalTests || 0)}</td>
-                          <td>{fmtBytes(f?.sizeBytes || 0)}</td>
+                          <td>{r.regionName || "—"}</td>
+                          <td>{r.n}</td>
                         </tr>
                       ))}
                     </tbody>
