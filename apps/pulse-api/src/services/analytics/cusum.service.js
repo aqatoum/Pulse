@@ -1,70 +1,17 @@
+// apps/pulse-api/src/services/analytics/cusum.service.js
+
 const dayjs = require("dayjs");
 const isoWeek = require("dayjs/plugin/isoWeek");
 dayjs.extend(isoWeek);
 
+const DEFAULTS = require("../../config/analytics.defaults");
 const CLINICAL = require("../../config/clinical.thresholds");
 
-// ===== Helpers =====
+// ----------------------------
+// helpers
+// ----------------------------
 function normCode(x) {
   return String(x || "").trim().toUpperCase();
-}
-
-function pickBand(bands, ageYears) {
-  const a = typeof ageYears === "number" ? ageYears : Number(ageYears);
-  if (!Number.isFinite(a)) return null;
-  return (bands || []).find((b) => a >= b.min && a <= b.max) || null;
-}
-
-function anemiaThresholdHb(ageYears, sex) {
-  const age = typeof ageYears === "number" && Number.isFinite(ageYears) ? ageYears : null;
-  const s = String(sex || "U").toUpperCase();
-  if (age !== null && age >= 5 && age <= 14) return 11.5;
-  if (age !== null && age >= 15) {
-    if (s === "F") return 12.0;
-    if (s === "M") return 13.0;
-    return 11.5;
-  }
-  return 11.0;
-}
-
-function buildCaseDef({ signalType, testCode }) {
-  const st = String(signalType || "").toLowerCase();
-  const tc = normCode(testCode);
-
-  if (st === "anemia" || tc === "HB" || tc === "HGB") {
-    return {
-      direction: "low",
-      isCase: (value, row) => value < anemiaThresholdHb(row?.ageYears, row?.sex),
-    };
-  }
-
-  const cfg = CLINICAL?.[tc] || null;
-  if (!cfg) return null;
-
-  const dir = String(cfg.direction || "high").toLowerCase() === "low" ? "low" : "high";
-
-  return {
-    direction: dir,
-    isCase: (value, row) => {
-      const band = pickBand(cfg.bands, row?.ageYears);
-      if (!band) return false;
-      if (dir === "high") {
-        const u = typeof band.upper === "number" ? band.upper : null;
-        if (u == null) return false;
-        return value > u;
-      }
-      const l = typeof band.lower === "number" ? band.lower : null;
-      if (l == null) return false;
-      return value < l;
-    },
-  };
-}
-
-function getWeekKey(d) {
-  const x = dayjs(d);
-  const y = x.isoWeekYear();
-  const w = String(x.isoWeek()).padStart(2, "0");
-  return `${y}-W${w}`;
 }
 
 function safeNum(v) {
@@ -73,12 +20,17 @@ function safeNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-function extractValue(row) {
-  const v = safeNum(row?.value);
-  if (v != null) return v;
-  const hb = safeNum(row?.hb);
-  if (hb != null) return hb;
-  return null;
+function clampNum(x, min, max) {
+  const n = safeNum(x);
+  if (n == null) return null;
+  return Math.min(max, Math.max(min, n));
+}
+
+function clampInt(x, min, max) {
+  const n = safeNum(x);
+  if (n == null) return null;
+  const k = Math.round(n);
+  return Math.min(max, Math.max(min, k));
 }
 
 function mean(arr) {
@@ -93,87 +45,291 @@ function std(arr) {
   return Math.sqrt(v);
 }
 
+function getWeekKey(d) {
+  const x = dayjs(d);
+  const y = x.isoWeekYear();
+  const w = String(x.isoWeek()).padStart(2, "0");
+  return `${y}-W${w}`;
+}
+
+// Accept both shapes:
+// - {start,end} from your router
+// - {from,to} from newer services
+function normalizeTimeRange(timeRange) {
+  if (!timeRange) return null;
+  const from = timeRange.from || timeRange.start || null;
+  const to = timeRange.to || timeRange.end || null;
+  return { from, to };
+}
+
+function inRange(dt, timeRange) {
+  const tr = normalizeTimeRange(timeRange);
+  if (!tr) return true;
+  const x = dayjs(dt);
+  const from = tr.from ? dayjs(tr.from) : null;
+  const to = tr.to ? dayjs(tr.to) : null;
+  if (from && x.isBefore(from, "day")) return false;
+  if (to && x.isAfter(to, "day")) return false;
+  return true;
+}
+
+function ageToDays(row) {
+  const ad = safeNum(row?.ageDays);
+  if (ad != null) return Math.max(0, Math.round(ad));
+  const ay = safeNum(row?.ageYears);
+  if (ay != null) return Math.max(0, Math.round(ay * 365.25));
+  return null;
+}
+
+function resolveClinicalConfig(testCode) {
+  const tc = normCode(testCode);
+  if (CLINICAL?.[tc] && !CLINICAL[tc]?.aliasOf) return { tc, cfg: CLINICAL[tc] };
+
+  // aliasOf support
+  if (CLINICAL?.[tc]?.aliasOf) {
+    const base = normCode(CLINICAL[tc].aliasOf);
+    if (CLINICAL?.[base]) return { tc: base, cfg: CLINICAL[base] };
+  }
+
+  // aliases array support
+  for (const [k, cfg] of Object.entries(CLINICAL || {})) {
+    const aliases = (cfg?.aliases || []).map(normCode);
+    if (aliases.includes(tc)) return { tc: k, cfg };
+  }
+
+  return { tc, cfg: null };
+}
+
+// Supports both band formats (for safety):
+// - new: {minDays,maxDays}
+// - old: {min,max} (ageYears)
+function pickBand(bands, ageDays, ageYears) {
+  if (!Array.isArray(bands)) return null;
+
+  if (ageDays != null) {
+    const b = bands.find((x) => typeof x.minDays === "number" && ageDays >= x.minDays && ageDays <= x.maxDays);
+    if (b) return b;
+  }
+  if (ageYears != null) {
+    const b = bands.find((x) => typeof x.min === "number" && ageYears >= x.min && ageYears <= x.max);
+    if (b) return b;
+  }
+  return null;
+}
+
+function buildCaseDef(testCode) {
+  const { tc, cfg } = resolveClinicalConfig(testCode);
+  if (!cfg) return null;
+
+  const dirRaw = String(cfg.direction || "both").toLowerCase();
+  const dir = dirRaw === "high" || dirRaw === "low" || dirRaw === "both" ? dirRaw : "both";
+
+  return {
+    testCode: tc,
+    direction: dir,
+    unit: cfg.unit || null,
+
+    classify(value, row) {
+      const v = safeNum(value);
+      if (v == null) return null;
+
+      const sex = String(row?.sex || "U").toUpperCase();
+      const ageDays = ageToDays(row);
+      const ageYears = safeNum(row?.ageYears);
+
+      const bands =
+        cfg?.sexBands?.[sex] && Array.isArray(cfg.sexBands[sex]) && cfg.sexBands[sex].length
+          ? cfg.sexBands[sex]
+          : cfg.bands;
+
+      const band = pickBand(bands, ageDays, ageYears);
+      if (!band) return null;
+
+      const lower = typeof band.lower === "number" ? band.lower : null;
+      const upper = typeof band.upper === "number" ? band.upper : null;
+
+      const isLow = lower != null ? v < lower : false;
+      const isHigh = upper != null ? v > upper : false;
+
+      if (dir === "low") return isLow ? "low" : null;
+      if (dir === "high") return isHigh ? "high" : null;
+
+      // both
+      if (isLow) return "low";
+      if (isHigh) return "high";
+      return null;
+    },
+  };
+}
+
+function extractValue(row) {
+  // your DB rows already map to { value }
+  const v = safeNum(row?.value);
+  if (v != null) return v;
+  // extra fallbacks if needed
+  const r = safeNum(row?.result);
+  if (r != null) return r;
+  return null;
+}
+
+function getCusumConfig({ preset = "standard", testCode = null, overrides = null }) {
+  const G = DEFAULTS?.global || DEFAULTS?.anemia || {};
+  const bounds = G?.bounds?.cusum || {
+    baselineN: { min: 4, max: 26 },
+    k: { min: 0.1, max: 1.0 },
+    h: { min: 2.0, max: 10.0 },
+  };
+
+  const presetName = String(preset || G.defaultPreset || "standard").toLowerCase();
+  const base = G?.presets?.[presetName]?.cusum || G?.presets?.standard?.cusum || { baselineN: 6, k: 0.5, h: 5.0 };
+
+  const tc = testCode ? normCode(testCode) : null;
+  const testPreset = tc ? DEFAULTS?.byTestCode?.[tc]?.presets?.[presetName]?.cusum : null;
+
+  const merged = {
+    baselineN: overrides?.baselineN ?? testPreset?.baselineN ?? base.baselineN,
+    k: overrides?.k ?? testPreset?.k ?? base.k,
+    h: overrides?.h ?? testPreset?.h ?? base.h,
+  };
+
+  return {
+    baselineN: clampInt(merged.baselineN, bounds.baselineN.min, bounds.baselineN.max),
+    k: clampNum(merged.k, bounds.k.min, bounds.k.max),
+    h: clampNum(merged.h, bounds.h.min, bounds.h.max),
+  };
+}
+
 /**
- * ✅ Generic CUSUM over weekly CASE rate.
+ * ✅ Professional CUSUM on weekly out-of-range rate.
+ *
+ * Keeps backward compatibility with your router signature:
+ * - accepts signalType (ignored)
+ * - accepts timeRange in {start,end} or {from,to}
  */
 function computeSignalCusum({
   rows,
-  signalType = "anemia",
-  testCode = "HB",
-  baselineN = 4,
-  k = 0.5,
-  h = 5.0,
-  lang = "both",
+  signalType = null, // kept for compatibility
+  testCode,
   preset = "standard",
   timeRange = null,
+  lang = "both",
+
+  // allow router to pass baselineN,k,h
+  baselineN: baselineNIn,
+  k: kIn,
+  h: hIn,
+
+  // optional new param
+  mode = "total", // "total" | "high" | "low"
 }) {
-  const caseDef = buildCaseDef({ signalType, testCode });
+  const tc = normCode(testCode);
+  const caseDef = buildCaseDef(tc);
+
   if (!caseDef) {
+    const msgAr = `لا توجد عتبات سريرية معرفة للفحص ${tc} بعد.`;
+    const msgEn = `No clinical thresholds defined for ${tc} yet.`;
     return {
       cusum: {
+        testCode: tc,
+        direction: null,
+        preset,
+        mode,
         baselineWeeksUsed: 0,
         baselineMean: null,
         baselineStd: null,
-        k,
-        h,
-        direction: null,
-        testCode: normCode(testCode),
+        k: null,
+        h: null,
         points: [],
       },
-      interpretation:
-        lang === "both"
-          ? { ar: "لا توجد عتبات سريرية معرفة لهذا الفحص بعد.", en: "No clinical thresholds defined for this test yet." }
-          : lang === "ar"
-          ? "لا توجد عتبات سريرية معرفة لهذا الفحص بعد."
-          : "No clinical thresholds defined for this test yet.",
+      interpretation: lang === "both" ? { ar: msgAr, en: msgEn } : lang === "ar" ? msgAr : msgEn,
     };
   }
 
+  const cfg = getCusumConfig({
+    preset,
+    testCode: tc,
+    overrides: { baselineN: baselineNIn, k: kIn, h: hIn },
+  });
+
   const byWeek = new Map();
+
   for (const r of rows || []) {
     const dt = r?.testDate || r?.collectedAt;
     if (!dt) continue;
+    if (!inRange(dt, timeRange)) continue;
 
+    // rows already filtered by testCode in DB query, but keep safe:
     const rowCode = r?.testCode ? normCode(r.testCode) : null;
-    if (rowCode && normCode(testCode) && rowCode !== normCode(testCode)) continue;
+    if (rowCode && rowCode !== tc) continue;
 
     const v = extractValue(r);
     if (v == null) continue;
 
     const wk = getWeekKey(dt);
-    if (!byWeek.has(wk)) byWeek.set(wk, { n: 0, cases: 0 });
+    if (!byWeek.has(wk)) byWeek.set(wk, { n: 0, low: 0, high: 0 });
     const g = byWeek.get(wk);
 
     g.n += 1;
-    if (caseDef.isCase(v, r)) g.cases += 1;
+    const cls = caseDef.classify(v, r);
+    if (cls === "low") g.low += 1;
+    if (cls === "high") g.high += 1;
   }
 
   const weeks = Array.from(byWeek.keys()).sort();
-  const points = weeks.map((wk) => {
-    const g = byWeek.get(wk);
-    const rate = g.n > 0 ? g.cases / g.n : 0;
+  if (!weeks.length) {
+    const msgAr = `لا توجد بيانات كافية للفحص ${tc}.`;
+    const msgEn = `No data available for ${tc}.`;
     return {
-      week: wk,
-      n: g.n,
-      low: caseDef.direction === "low" ? g.cases : 0,
-      lowRate: caseDef.direction === "low" ? rate : 0,
-      high: caseDef.direction === "high" ? g.cases : 0,
-      highRate: caseDef.direction === "high" ? rate : 0,
+      cusum: {
+        testCode: tc,
+        direction: caseDef.direction,
+        preset,
+        mode,
+        baselineWeeksUsed: 0,
+        baselineMean: null,
+        baselineStd: null,
+        k: cfg.k,
+        h: cfg.h,
+        points: [],
+      },
+      interpretation: lang === "both" ? { ar: msgAr, en: msgEn } : lang === "ar" ? msgAr : msgEn,
+    };
+  }
+
+  const pointsRaw = weeks.map((week) => {
+    const g = byWeek.get(week);
+    const n = g.n || 0;
+    const lowRate = n ? g.low / n : 0;
+    const highRate = n ? g.high / n : 0;
+
+    let rate = 0;
+    if (mode === "high") rate = highRate;
+    else if (mode === "low") rate = lowRate;
+    else rate = n ? (g.low + g.high) / n : 0;
+
+    return {
+      week,
+      n,
+      low: g.low,
+      high: g.high,
+      lowRate,
+      highRate,
       rate,
     };
   });
 
-  const baseSlice = points.slice(0, Math.max(0, baselineN));
+  const baseSlice = pointsRaw.slice(0, Math.max(0, cfg.baselineN));
   const baseRates = baseSlice.map((p) => p.rate);
   const baselineMean = mean(baseRates) ?? 0;
   const baselineStd = std(baseRates);
 
-  // one-sided upper CUSUM on rate
+  // upper one-sided CUSUM on standardized deviation
   let c = 0;
-  const outPoints = points.map((p) => {
-    const s = (p.rate - baselineMean) / (baselineStd || 1); // standardized-ish; safe if std=0
-    c = Math.max(0, c + (s - k));
-    const alert = c > h && baselineStd > 0;
+  const outPoints = pointsRaw.map((p) => {
+    const s = (p.rate - baselineMean) / (baselineStd || 1);
+    c = Math.max(0, c + (s - cfg.k));
+    const alert = baselineStd > 0 ? c > cfg.h : false;
+
     return {
       week: p.week,
       n: p.n,
@@ -181,46 +337,42 @@ function computeSignalCusum({
       lowRate: p.lowRate,
       high: p.high,
       highRate: p.highRate,
+      rate: p.rate,
       s: Number(s.toFixed(4)),
       c: Number(c.toFixed(4)),
       alert,
     };
   });
 
-  const last = outPoints[outPoints.length - 1] || null;
+  const last = outPoints[outPoints.length - 1];
 
-  const interpEn =
-    !outPoints.length
-      ? `No data available for ${normCode(testCode)}.`
-      : `CUSUM tracked weekly ${caseDef.direction.toUpperCase()}-case rate for ${normCode(
-          testCode
-        )}. Latest week ${last.week} has ${last.n} tests; alert=${last.alert ? "YES" : "NO"}.`;
+  const modeLabelEn = mode === "high" ? "HIGH-only" : mode === "low" ? "LOW-only" : "out-of-range (LOW+HIGH)";
+  const modeLabelAr = mode === "high" ? "مرتفع فقط" : mode === "low" ? "منخفض فقط" : "خارج المجال (منخفض+مرتفع)";
 
-  const interpAr =
-    !outPoints.length
-      ? `لا توجد بيانات للفحص ${normCode(testCode)}.`
-      : `تم تتبع CUSUM لمعدل الحالات (${caseDef.direction === "high" ? "مرتفع" : "منخفض"}) أسبوعيًا للفحص ${normCode(
-          testCode
-        )}. آخر أسبوع ${last.week} عدد الفحوصات ${last.n}؛ إنذار=${last.alert ? "نعم" : "لا"}.`;
+  const interpEn = `CUSUM tracked weekly ${modeLabelEn} rate for ${tc}. Latest ${last.week}: n=${last.n}, alert=${last.alert ? "YES" : "NO"}.`;
+  const interpAr = `تم تتبع CUSUM لمعدل ${modeLabelAr} أسبوعيًا للفحص ${tc}. آخر أسبوع ${last.week}: عدد=${last.n}، إنذار=${last.alert ? "نعم" : "لا"}.`;
 
   return {
     cusum: {
-      baselineWeeksUsed: baseSlice.length,
-      baselineMean: Number((baselineMean ?? 0).toFixed(4)),
-      baselineStd: Number((baselineStd ?? 0).toFixed(4)),
-      k,
-      h,
+      testCode: tc,
       direction: caseDef.direction,
-      testCode: normCode(testCode),
+      preset,
+      mode,
+      baselineWeeksUsed: baseSlice.length,
+      baselineMean: Number(baselineMean.toFixed(6)),
+      baselineStd: Number(baselineStd.toFixed(6)),
+      k: cfg.k,
+      h: cfg.h,
       points: outPoints,
+      meta: { unit: caseDef.unit || null },
     },
-    interpretation:
-      lang === "both" ? { ar: interpAr, en: interpEn } : lang === "ar" ? interpAr : interpEn,
+    interpretation: lang === "both" ? { ar: interpAr, en: interpEn } : lang === "ar" ? interpAr : interpEn,
   };
 }
 
+// ✅ backward compatible alias
 function computeAnemiaCusum(args) {
-  return computeSignalCusum({ ...args, signalType: "anemia", testCode: "HB" });
+  return computeSignalCusum({ ...args, testCode: "HB" });
 }
 
 module.exports = { computeSignalCusum, computeAnemiaCusum };

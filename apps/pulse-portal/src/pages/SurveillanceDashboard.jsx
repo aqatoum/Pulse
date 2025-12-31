@@ -244,61 +244,6 @@ const styles = `
     background: linear-gradient(90deg, rgba(16,185,129,0.95), rgba(245,158,11,0.92), rgba(239,68,68,0.92));
   }
 
-  /* Modal */
-  .modalOverlay{
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.55);
-    backdrop-filter: blur(6px);
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    padding: 16px;
-    z-index: 9999;
-  }
-  .modal{
-    width: min(1100px, 100%);
-    max-height: calc(100vh - 32px);
-    border-radius: 18px;
-    background: rgba(12,18,32,0.92);
-    border: 1px solid rgba(255,255,255,0.14);
-    box-shadow: 0 18px 60px rgba(0,0,0,0.45);
-    overflow:hidden;
-    display:flex;
-    flex-direction: column;
-  }
-  .modalHeader{
-    display:flex;
-    justify-content:space-between;
-    gap: 10px;
-    align-items:flex-start;
-    padding: 14px 16px;
-    border-bottom: 1px solid rgba(255,255,255,0.10);
-  }
-  .modalTitle{ font-weight: 950; }
-  .modalBody{
-    padding: 14px 16px;
-    overflow: auto;
-    max-height: calc(100vh - 120px);
-    -webkit-overflow-scrolling: touch;
-  }
-  .table{
-    width: 100%;
-    border-collapse: collapse;
-    overflow:hidden;
-    border-radius: 12px;
-    border: 1px solid rgba(255,255,255,0.12);
-  }
-  .table th, .table td{
-    padding: 10px 10px;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
-    font-size: 12px;
-    text-align: start;
-    vertical-align: top;
-  }
-  .table th{ font-weight: 950; background: rgba(255,255,255,0.06); }
-  .table tr:last-child td{ border-bottom: 0; }
-
   .footer{
     margin-top: 4px;
     border-radius: 18px;
@@ -344,8 +289,14 @@ const styles = `
 `;
 
 /* =========================
-   ✅ Trend + Confidence
+   ✅ Trend + Confidence helpers
    ========================= */
+
+/**
+ * computeTrendFromWeekly:
+ * - يستخدم آخر 6 نقاط (3 أولى مقابل 3 أخيرة)
+ * - يرجع: up/down/flat/no_data
+ */
 function computeTrendFromWeekly(weekly) {
   const w = Array.isArray(weekly) ? weekly : [];
   const series = w
@@ -364,6 +315,51 @@ function computeTrendFromWeekly(weekly) {
   return "flat";
 }
 
+/**
+ * Trend fallback (مهم):
+ * backend عندك غالبًا لا يرسل weekly.
+ * هذا fallback يشتق Trend من نتائج الطرق المتاحة بدون كسر.
+ *
+ * - CUSUM: لو كان يرسل rate داخل points (أحيانًا نعم)
+ * - EWMA: يستخدم z كبديل لاتجاه عام (ليس معدل حالات، لكنه إشارة اتجاه)
+ * - Farrington: يستخدم cases كاتجاه للأعداد
+ */
+function trendFromResults(results) {
+  const r = results || {};
+
+  // (1) CUSUM rate if exists
+  const cPts = r?.cusum?.points;
+  if (Array.isArray(cPts) && cPts.length) {
+    const rateSeries = cPts
+      .map((p) => ({ rate: typeof p?.rate === "number" ? p.rate : Number(p?.rate) }))
+      .filter((x) => Number.isFinite(x.rate));
+    const k = computeTrendFromWeekly(rateSeries);
+    if (k !== "no_data") return k;
+  }
+
+  // (2) EWMA z fallback
+  const ePts = r?.ewma?.points;
+  if (Array.isArray(ePts) && ePts.length) {
+    const zSeries = ePts
+      .map((p) => ({ rate: typeof p?.z === "number" ? p.z : Number(p?.z) }))
+      .filter((x) => Number.isFinite(x.rate));
+    const k = computeTrendFromWeekly(zSeries);
+    if (k !== "no_data") return k;
+  }
+
+  // (3) Farrington cases fallback
+  const fPts = r?.farrington?.points;
+  if (Array.isArray(fPts) && fPts.length) {
+    const casesSeries = fPts
+      .map((p) => ({ rate: typeof p?.cases === "number" ? p.cases : Number(p?.cases) }))
+      .filter((x) => Number.isFinite(x.rate));
+    const k = computeTrendFromWeekly(casesSeries);
+    if (k !== "no_data") return k;
+  }
+
+  return "no_data";
+}
+
 function computeConfidence(meta) {
   const dq = meta?.dataQuality || meta?.meta?.dataQuality || meta || {};
   const overallN = dq?.overallN ?? dq?.n ?? null;
@@ -374,6 +370,9 @@ function computeConfidence(meta) {
   return "low";
 }
 
+/* =========================
+   ✅ Decision helpers
+   ========================= */
 function decisionTheme(decisionUpper) {
   const d = String(decisionUpper || "INFO").toUpperCase();
   if (d === "ALERT") return { key: "alert", color: "var(--alert)" };
@@ -400,12 +399,16 @@ function deriveDecisionFromResults(results) {
   const farrA = lastPointHasAlert(results?.farrington);
 
   const alertCount = [ewmaA, cusumA, farrA].filter(Boolean).length;
-
   if (alertCount >= 2) return "alert";
   if (alertCount === 1) return "watch";
   return "info";
 }
 
+/**
+ * computeUiDecision:
+ * - يعتمد على consensus أولاً (الأصح)
+ * - لكنه "يحمي" الحالة التي يكون فيها consensus=alert بناءً على طريقة واحدة فقط
+ */
 function computeUiDecision(runData) {
   const d = normDecision(runData?.consensus?.decision);
 
@@ -428,6 +431,7 @@ function listMethodAlerts(runData) {
     if (lvl === "alert") out.push(k.toUpperCase());
   }
 
+  // fallback: derive from points
   if (!out.length) {
     const r = runData?.results || {};
     if (lastPointHasAlert(r.ewma)) out.push("EWMA");
@@ -514,7 +518,11 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const [endDate, setEndDate] = useState("");
   const [preset, setPreset] = useState("standard");
 
-  // ✅ (Removed advanced UI) — لكن نخلي قيم preset الداخلية كما هي عشان run لا ينكسر
+  /**
+   * ملاحظة:
+   * UI advanced غير ظاهر، لكننا نرسل advanced=1 مع قيم preset
+   * لضمان نفس سلوك الحساب داخل الباك-إند وعدم كسر التوافق.
+   */
   const [ewmaLambda, setEwmaLambda] = useState(PRESETS.standard.ewma.lambda);
   const [ewmaL, setEwmaL] = useState(PRESETS.standard.ewma.L);
   const [ewmaBaselineN, setEwmaBaselineN] = useState(PRESETS.standard.ewma.baselineN);
@@ -526,7 +534,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const [farringtonBaselineWeeks, setFarringtonBaselineWeeks] = useState(PRESETS.standard.farrington.baselineWeeks);
   const [farringtonZ, setFarringtonZ] = useState(PRESETS.standard.farrington.z);
 
-  // كلما تغير preset نحدث القيم تلقائيًا
+  // تحديث قيم preset تلقائيًا
   useEffect(() => {
     const p = PRESETS[preset] || PRESETS.standard;
     setEwmaLambda(p.ewma.lambda);
@@ -551,19 +559,12 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const [dataRange, setDataRange] = useState(null);
 
   const [chartsPayload, setChartsPayload] = useState(null);
-
   const [lastUpload, setLastUpload] = useState(null);
-
   const [showDetails, setShowDetails] = useState(false);
-
-  // ✅ Uploads report UI state
-  const [reportOpen, setReportOpen] = useState(false);
-  const [reportLoading, setReportLoading] = useState(false);
-  const [reportErr, setReportErr] = useState("");
-  const [reportData, setReportData] = useState(null);
 
   const abortRef = useRef(null);
 
+  // Health ping
   useEffect(() => {
     let cancelled = false;
     async function loadHealth() {
@@ -610,8 +611,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     if (preset) params.set("preset", preset);
     if (testCode) params.set("testCode", String(testCode));
 
-    // ✅ لا يوجد UI advanced، لكن نرسل القيم الحالية لضمان نفس سلوك الحساب
+    // ✅ advanced mode ON (بدون UI) لضمان التوافق
     params.set("advanced", "1");
+
     params.set("ewmaLambda", String(clampNum(ewmaLambda, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max)));
     params.set("ewmaL", String(clampNum(ewmaL, BOUNDS.ewma.L.min, BOUNDS.ewma.L.max)));
     params.set("ewmaBaselineN", String(clampInt(ewmaBaselineN, BOUNDS.ewma.baselineN.min, BOUNDS.ewma.baselineN.max)));
@@ -632,14 +634,16 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   function scopeLabel() {
     if (scopeMode === "global") return t.modeGlobal;
 
-    const core =
-      scopeMode === "facility"
-        ? `${t.modeFacility}: ${facilityId?.trim() || t.notAvailable}`
-        : `${t.modeRegion}: ${regionId?.trim() || t.notAvailable}`;
-
-    return core;
+    return scopeMode === "facility"
+      ? `${t.modeFacility}: ${facilityId?.trim() || t.notAvailable}`
+      : `${t.modeRegion}: ${regionId?.trim() || t.notAvailable}`;
   }
 
+  /**
+   * ✅ RUN:
+   * - يطلب /run ثم /report
+   * - يبني chartsPayload بشكل متوافق مع adapt* الموجودة عندك
+   */
   async function runAnalysis() {
     const m = selectedMethods();
     if (!m.length) return;
@@ -653,6 +657,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       return;
     }
 
+    // abort previous request
     if (abortRef.current) {
       try {
         abortRef.current.abort();
@@ -687,6 +692,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       if (dr1) setDataRange(dr1);
 
       const results = runPayload?.results || {};
+
+      // chartsPayload: نفس البنية التي كنت تستخدمها سابقًا
       setChartsPayload({
         ewma: results?.ewma ? { data: { ewma: results.ewma } } : null,
         cusum: results?.cusum ? { data: { cusum: results.cusum } } : null,
@@ -707,6 +714,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       const finalReport = (extracted?.trim() ? extracted : "").trim();
       setReportText(finalReport || t.insufficient);
 
+      // ✅ لو report رجّع consensus أحدث، نحدث runData
       const repConsensus = repJ?.data?.meta?.consensus || repJ?.data?.meta?.meta?.consensus || null;
       if (repConsensus) {
         setRunData((prev) => {
@@ -715,6 +723,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         });
       }
 
+      // refresh health time
       try {
         const hj = await fetchJSON(`${apiBase}/health`, controller.signal);
         setLastUpdated(hj?.time || hj?.timestamp || null);
@@ -750,224 +759,20 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     setShowDetails(false);
   }
 
-  function normalizeUploadsReport(apiData) {
-  const d = apiData || {};
-  // إذا جاء الملخص جاهز
-  if (d.totals || d.byTest || d.facilities || d.regions) return d;
-
-  // إذا جاء فقط uploads[] (مثل اللي أرسلته سابقاً)
-  const uploads = Array.isArray(d.uploads) ? d.uploads : [];
-
-  const totals = {
-    files: uploads.length,
-    tests: uploads.reduce((s, u) => s + Number(u?.totalTests || 0), 0),
-    facilities: new Set(uploads.flatMap((u) => u?.facilityIds || [])).size,
-    regions: new Set(uploads.flatMap((u) => u?.regionIds || [])).size,
-  };
-
-  // byTest: نجرب testsByCode إن وجد، وإلا نستنتج من اسم الملف (HB/WBC/CRP/PLT)
-  const byTestMap = new Map();
-  const guessTestCode = (name = "") => {
-    const s = String(name).toUpperCase();
-    if (s.includes("HB")) return "HB";
-    if (s.includes("WBC")) return "WBC";
-    if (s.includes("CRP")) return "CRP";
-    if (s.includes("PLT")) return "PLT";
-    return "UNKNOWN";
-  };
-
-  for (const u of uploads) {
-    const tbc = u?.testsByCode && typeof u.testsByCode === "object" ? u.testsByCode : null;
-    if (tbc && Object.keys(tbc).length) {
-      for (const [code, n] of Object.entries(tbc)) {
-        byTestMap.set(code, (byTestMap.get(code) || 0) + Number(n || 0));
-      }
-    } else {
-      const code = guessTestCode(u?.fileName);
-      byTestMap.set(code, (byTestMap.get(code) || 0) + Number(u?.totalTests || 0));
-    }
-  }
-
-  const byTest = Array.from(byTestMap.entries())
-    .map(([testCode, n]) => ({ testCode, n }))
-    .sort((a, b) => b.n - a.n);
-
-  // facilities summary
-  const facMap = new Map();
-  for (const u of uploads) {
-    const n = Number(u?.totalTests || 0);
-    for (const fid of u?.facilityIds || []) {
-      facMap.set(fid, (facMap.get(fid) || 0) + n);
-    }
-  }
-  const facilities = Array.from(facMap.entries())
-    .map(([facilityId, n]) => ({ facilityId, facilityName: "—", n }))
-    .sort((a, b) => b.n - a.n);
-
-  // regions summary
-  const regMap = new Map();
-  for (const u of uploads) {
-    const n = Number(u?.totalTests || 0);
-    for (const rid of u?.regionIds || []) {
-      regMap.set(rid, (regMap.get(rid) || 0) + n);
-    }
-  }
-  const regions = Array.from(regMap.entries())
-    .map(([regionId, n]) => ({ regionId, regionName: "—", n }))
-    .sort((a, b) => b.n - a.n);
-
-  return { totals, byTest, facilities, regions, uploads };
-}
-
-  // ✅ Uploads report loader (normalized)
-function normalizeUploadsSummary(payload) {
-  if (!payload) return null;
-
-  // الحالة A: summary shape
-  // payload = { uploadsCount, grandTotalTests, facilitiesCount, regionsCount, facilityIds, regionIds, testsByCode }
-  if (
-    typeof payload.uploadsCount === "number" ||
-    typeof payload.grandTotalTests === "number" ||
-    payload.testsByCode
-  ) {
-    const totals = {
-      files: payload.uploadsCount ?? 0,
-      tests: payload.grandTotalTests ?? 0,
-      facilities:
-        payload.facilitiesCount ??
-        (Array.isArray(payload.facilityIds) ? payload.facilityIds.length : 0),
-      regions:
-        payload.regionsCount ??
-        (Array.isArray(payload.regionIds) ? payload.regionIds.length : 0),
-    };
-
-    const byTest = payload.testsByCode
-      ? Object.entries(payload.testsByCode).map(([testCode, n]) => ({
-          testCode,
-          n: Number(n || 0),
-        }))
-      : [];
-
-    const facilities = Array.isArray(payload.facilityIds)
-      ? payload.facilityIds.map((facilityId) => ({
-          facilityId,
-          facilityName: "",
-          n: "",
-        }))
-      : [];
-
-    const regions = Array.isArray(payload.regionIds)
-      ? payload.regionIds.map((regionId) => ({
-          regionId,
-          regionName: "",
-          n: "",
-        }))
-      : [];
-
-    return { totals, byTest, facilities, regions };
-  }
-
-  // الحالة B: uploads list shape
-  // payload = { uploads: [...] }
-  if (Array.isArray(payload.uploads)) {
-    const uploads = payload.uploads;
-
-    const totals = uploads.reduce(
-      (acc, u) => {
-        acc.files += 1;
-        const t = Number(u.totalTests ?? u.rowsAccepted ?? 0);
-        acc.tests += Number.isFinite(t) ? t : 0;
-
-        (Array.isArray(u.facilityIds) ? u.facilityIds : []).forEach((id) => id && acc._fac.add(String(id)));
-        (Array.isArray(u.regionIds) ? u.regionIds : []).forEach((id) => id && acc._reg.add(String(id)));
-
-        const map = u.testsByCode && typeof u.testsByCode === "object" ? u.testsByCode : {};
-        for (const [k, v] of Object.entries(map)) {
-          const code = String(k).toUpperCase();
-          const n = Number(v || 0);
-          if (!Number.isFinite(n)) continue;
-          acc._byTest[code] = (acc._byTest[code] || 0) + n;
-        }
-        return acc;
-      },
-      { files: 0, tests: 0, _fac: new Set(), _reg: new Set(), _byTest: {} }
-    );
-
-    const byTest = Object.entries(totals._byTest)
-      .map(([testCode, n]) => ({ testCode, n }))
-      .sort((a, b) => b.n - a.n);
-
-    const facilities = Array.from(totals._fac).sort().map((facilityId) => ({
-      facilityId,
-      facilityName: "",
-      n: "",
-    }));
-
-    const regions = Array.from(totals._reg).sort().map((regionId) => ({
-      regionId,
-      regionName: "",
-      n: "",
-    }));
-
-    return {
-      totals: {
-        files: totals.files,
-        tests: totals.tests,
-        facilities: totals._fac.size,
-        regions: totals._reg.size,
-      },
-      byTest,
-      facilities,
-      regions,
-    };
-  }
-
-  return null;
-}
-
-async function loadUploadsReport() {
-  setReportLoading(true);
-  setReportErr("");
-
-  try {
-    // ✅ الأفضل دائمًا
-    let j = await fetchJSON(`${apiBase}/api/report/summary?ts=${Date.now()}`);
-
-    // لو رجع لكن بدون data لأي سبب
-    let normalized = normalizeUploadsSummary(j?.data);
-
-    // ✅ fallback حقيقي: نجيب uploads ونحسب منها
-    if (!normalized) {
-      const j2 = await fetchJSON(`${apiBase}/api/report/uploads?limit=200&skip=0&ts=${Date.now()}`);
-      normalized = normalizeUploadsSummary(j2?.data);
-    }
-
-    if (!normalized) throw new Error("No usable report data from API response.");
-
-    setReportData(normalized);
-    setReportOpen(true);
-  } catch (e) {
-    setReportErr(String(e?.message || e));
-    setReportData(null);
-    setReportOpen(true);
-  } finally {
-    setReportLoading(false);
-  }
-}
-
-   
-
-
+  /* =========================
+     ✅ Derived UI values
+     ========================= */
   const uiDecision = computeUiDecision(runData);
   const decision = upper(uiDecision);
 
   const theme = decisionTheme(decision);
   const decisionKey = theme.key;
-
   const methodAlerts = listMethodAlerts(runData);
 
+  // weekly may not exist → fallback on results
   const weekly = runData?.meta?.weekly || runData?.meta?.meta?.weekly || runData?.weekly || null;
-  const trendKey = computeTrendFromWeekly(weekly);
+  const trendKey = weekly ? computeTrendFromWeekly(weekly) : trendFromResults(runData?.results);
+
   const confidenceKey = computeConfidence(runData?.meta || runData?.meta?.meta || runData?.meta);
 
   const trendLabel =
@@ -976,7 +781,6 @@ async function loadUploadsReport() {
   const confLabel = confidenceKey === "high" ? t.confHigh : confidenceKey === "med" ? t.confMed : t.confLow;
 
   const statusLabel = decision === "ALERT" ? t.alert : decision === "WATCH" ? t.watch : t.info;
-
   const trustMethods = methodsLabel(selectedMethods());
 
   const dataset = lastUpload?.ok ? t.uploadOk : t.notAvailable;
@@ -986,7 +790,6 @@ async function loadUploadsReport() {
   const faCfg = adaptFarrington(chartsPayload?.farrington);
 
   const presetLabel = preset === "low" ? t.presetLow : preset === "high" ? t.presetHigh : t.presetStandard;
-
   const canRunNow = !loading;
 
   const profile = runData?.profile || null;
@@ -1000,6 +803,10 @@ async function loadUploadsReport() {
   const overallN = profile?.overall?.n ?? 0;
   const overallRate = pickRate(profile?.overall);
   const overallCases = pickCases(profile?.overall);
+
+  // Farrington data sufficiency message (seasonal mode)
+  const fSuff = runData?.results?.farrington?.dataSufficiency || null;
+  const fDisabled = !!(fSuff && fSuff.ok === false);
 
   const whyText = (() => {
     const parts = [];
@@ -1029,6 +836,9 @@ async function loadUploadsReport() {
     <div className="dash" dir={isRTL ? "rtl" : "ltr"}>
       <style>{styles}</style>
 
+      {/* =========================
+          ✅ Top Panel (Inputs + Upload)
+         ========================= */}
       <section className="panel">
         <div className="panelHeader">
           <div className="titleWrap">
@@ -1076,11 +886,8 @@ async function loadUploadsReport() {
             />
           </div>
 
-          <div className="actions" style={{ alignSelf: "end" }}>
-            <button type="button" className="ghostBtn" onClick={loadUploadsReport} disabled={reportLoading}>
-              {reportLoading ? "..." : lang === "ar" ? "تقرير الرفعات" : "Uploads Report"}
-            </button>
-          </div>
+          {/* ✅ حذفنا زر تقرير الرفعات بالكامل */}
+          <div className="actions" style={{ alignSelf: "end" }} />
         </div>
 
         <div className="formRow">
@@ -1177,7 +984,10 @@ async function loadUploadsReport() {
           </div>
         </div>
 
-        <div className="methodRow" style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 6 }}>
+        <div
+          className="methodRow"
+          style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 6 }}
+        >
           <div className="field" style={{ flex: 1 }}>
             <label>{t.methods}</label>
             <div className="chips" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1194,14 +1004,7 @@ async function loadUploadsReport() {
           </div>
 
           <div className="actions">
-            <button
-              type="button"
-              className="dangerBtn"
-              onClick={() => {
-                setPreset("high");
-              }}
-              disabled={loading}
-            >
+            <button type="button" className="dangerBtn" onClick={() => setPreset("high")} disabled={loading}>
               {t.quickHigh}
             </button>
 
@@ -1209,7 +1012,8 @@ async function loadUploadsReport() {
               {loading ? "…" : t.run}
             </button>
 
-            <button type="button" className="ghostBtn" onClick={resetRun} disabled={loading && !runData}>
+            {/* ✅ FIX: لا تسمح بالـ reset أثناء التحميل لتجنب تعارض الحالة */}
+            <button type="button" className="ghostBtn" onClick={resetRun} disabled={loading}>
               Reset
             </button>
 
@@ -1255,6 +1059,9 @@ async function loadUploadsReport() {
         </div>
       </section>
 
+      {/* =========================
+          ✅ Results Section
+         ========================= */}
       {runData ? (
         <section className="grid">
           <div className="card cardWide" style={{ padding: 0, background: "transparent", border: "0" }}>
@@ -1331,6 +1138,20 @@ async function loadUploadsReport() {
                     <b>{t.actions}</b> — {actionsText}
                   </div>
 
+                  {/* ✅ IMPORTANT: seasonal Farrington data sufficiency message */}
+                  {fDisabled ? (
+                    <div style={{ marginTop: 2, opacity: 0.92 }}>
+                      <b>{lang === "ar" ? "معلومة:" : "Info:"}</b>{" "}
+                      {lang === "ar"
+                        ? `Farrington الموسمي يحتاج تغطية زمنية كافية (عادة 52 أسبوعًا). تم تعطيل إنذارات هذه الطريقة بسبب: ${String(
+                            fSuff?.reason || "INSUFFICIENT_DATA"
+                          )}.`
+                        : `Seasonal Farrington requires sufficient time coverage (typically 52 weeks). Alerts are disabled for this method due to: ${String(
+                            fSuff?.reason || "INSUFFICIENT_DATA"
+                          )}.`}
+                    </div>
+                  ) : null}
+
                   {methodAlerts?.length ? (
                     <div style={{ marginTop: 2 }}>
                       <b>{lang === "ar" ? "ملاحظة:" : "Note:"}</b>{" "}
@@ -1398,7 +1219,11 @@ async function loadUploadsReport() {
                     </div>
 
                     {insightText ? (
-                      <div className="reportBox2" style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }} dir={isRTL ? "rtl" : "ltr"}>
+                      <div
+                        className="reportBox2"
+                        style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }}
+                        dir={isRTL ? "rtl" : "ltr"}
+                      >
                         {insightText}
                       </div>
                     ) : null}
@@ -1411,7 +1236,11 @@ async function loadUploadsReport() {
                   <div className="cardTitle">{t.narrative}</div>
                 </div>
 
-                <div className="reportBox2" dir={isRTL ? "rtl" : "ltr"} style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: 12, borderRadius: 12, minHeight: 180 }}>
+                <div
+                  className="reportBox2"
+                  dir={isRTL ? "rtl" : "ltr"}
+                  style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: 12, borderRadius: 12, minHeight: 180 }}
+                >
                   {reportText || t.empty}
                 </div>
 
@@ -1420,73 +1249,6 @@ async function loadUploadsReport() {
             </>
           ) : null}
         </section>
-      ) : null}
-
-      {/* ✅ Uploads Report Modal (FIXED to show data.uploads) */}
-      {reportOpen ? (
-        <div className="modalOverlay" onMouseDown={() => setReportOpen(false)}>
-          <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="modalHeader">
-              <div>
-                <div className="modalTitle">{lang === "ar" ? "تقرير الرفعات" : "Uploads Report"}</div>
-                <div className="muted" style={{ marginTop: 6 }}>
-                  {lang === "ar" ? "قائمة الملفات المرفوعة (كما وصلت من الخادم)." : "List of uploaded files (as returned by the API)."}
-                </div>
-              </div>
-              <button className="ghostBtn" onClick={() => setReportOpen(false)}>
-                {lang === "ar" ? "إغلاق" : "Close"}
-              </button>
-            </div>
-
-            <div className="modalBody">
-              {reportErr ? <div className="muted">{reportErr}</div> : null}
-
-              {!reportErr && reportLoading ? <div className="muted">{lang === "ar" ? "جاري التحميل..." : "Loading..."}</div> : null}
-
-              {!reportErr && !reportLoading && !reportData ? (
-                <div className="muted">{lang === "ar" ? "لا توجد بيانات." : "No data."}</div>
-              ) : null}
-
-              {Array.isArray(reportData?.uploads) && reportData.uploads.length ? (
-                <>
-                  <div className="mini" style={{ marginBottom: 12 }}>
-                    <div className="miniRow">
-                      <div className="miniKey">{lang === "ar" ? "عدد الملفات" : "Files"}</div>
-                      <div className="miniVal">{reportData.uploads.length}</div>
-                    </div>
-                  </div>
-
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>{lang === "ar" ? "الملف" : "File"}</th>
-                        <th>{lang === "ar" ? "الفحوصات" : "Tests"}</th>
-                        <th>{lang === "ar" ? "مقبول/مرفوض" : "Accepted/Rejected"}</th>
-                        <th>{lang === "ar" ? "المرافق" : "Facilities"}</th>
-                        <th>{lang === "ar" ? "المناطق" : "Regions"}</th>
-                        <th>{lang === "ar" ? "التاريخ" : "Date"}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {reportData.uploads.slice(0, 200).map((u, idx) => (
-                        <tr key={idx}>
-                          <td style={{ maxWidth: 340, wordBreak: "break-word" }}>{u.fileName || "—"}</td>
-                          <td>{u.totalTests ?? u.rowsAccepted ?? "—"}</td>
-                          <td>
-                            {(u.rowsAccepted ?? "—")} / {(u.rowsRejected ?? "—")}
-                          </td>
-                          <td>{Array.isArray(u.facilityIds) ? u.facilityIds.length : "—"}</td>
-                          <td>{Array.isArray(u.regionIds) ? u.regionIds.length : "—"}</td>
-                          <td>{u.createdAt ? new Date(u.createdAt).toLocaleString() : "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </>
-              ) : null}
-            </div>
-          </div>
-        </div>
       ) : null}
 
       <footer className="footer">

@@ -4,6 +4,7 @@ import React, { useMemo, useState } from "react";
  * UploadCsv.jsx — Professional single upload center
  * - One upload area only
  * - Clear, stable post-upload summary (no overlap)
+ * - Realistic status banner (success / uploaded but unusable / failed)
  * - Readiness badge (Ready / Needs review / Empty)
  * - Normalizes backend responses across shapes
  * - Calls onUploaded(normalized) so Dashboard can show ONE banner globally if needed
@@ -12,21 +13,25 @@ import React, { useMemo, useState } from "react";
 const TXT = {
   ar: {
     title: "رفع ملف CSV",
-    hint:
-      "ارفع نتائج الفحوصات لإدخالها للنظام على مستوى سكاني (Population-level).",
+    hint: "ارفع نتائج الفحوصات لإدخالها للنظام على مستوى سكاني (Population-level).",
     choose: "اختر ملف CSV",
     upload: "رفع الملف",
     uploading: "جاري الرفع…",
     replace: "استبدال بملف جديد",
     clear: "مسح نتيجة الرفع",
-    ok: "تم رفع الملف بنجاح",
-    err: "فشل رفع الملف",
+
+    // status headlines (more realistic)
+    okProcessed: "تم رفع الملف ومعالجة البيانات بنجاح",
+    okNoAccepted: "تم رفع الملف، لكن لم يتم قبول أي صف. راجع تنسيق الأعمدة والقيم.",
+    okNoRows: "تم رفع الملف، لكن لم يتم العثور على صفوف قابلة للقراءة.",
+    err: "فشل رفع/معالجة الملف. راجع التفاصيل التقنية.",
+
     meta: "ملخص الرفع",
     facility: "رمز المرفق (Facility)",
     fileName: "اسم الملف",
     fileSize: "حجم الملف",
-    rows: "عدد الصفوف",
-    tests: "عدد الفحوصات المقبولة",
+    rows: "إجمالي الصفوف",
+    tests: "الصفوف المقبولة",
     inserted: "تمت إضافتها",
     accepted: "مقبول",
     rejected: "مرفوض",
@@ -52,14 +57,18 @@ const TXT = {
     uploading: "Uploading…",
     replace: "Replace with a new file",
     clear: "Clear upload result",
-    ok: "Upload successful",
-    err: "Upload failed",
+
+    okProcessed: "Upload succeeded and data were processed",
+    okNoAccepted: "File uploaded, but no rows were accepted. Check headers/values.",
+    okNoRows: "File uploaded, but no readable rows were found.",
+    err: "Upload/processing failed. Check technical details.",
+
     meta: "Upload summary",
     facility: "Facility ID",
     fileName: "File name",
     fileSize: "File size",
-    rows: "Rows",
-    tests: "Accepted tests",
+    rows: "Total rows",
+    tests: "Accepted rows",
     inserted: "Inserted",
     accepted: "Accepted",
     rejected: "Rejected",
@@ -110,9 +119,7 @@ function isoNow() {
 }
 
 /**
- * Normalize upload response across multiple backend shapes:
- * Preferred modern shape:
- *  { ok:true, file:{originalName,sizeBytes,sha256}, processed:{rows,inserted,skipped,duplicates,errors}, dateRange:{start,end}, facilityId? }
+ * Normalize upload response across multiple backend shapes.
  */
 function normalizeUploadResult(j) {
   if (!j || typeof j !== "object") return null;
@@ -172,8 +179,7 @@ function normalizeUploadResult(j) {
 
   const skipped = processed?.skipped ?? j?.skipped ?? j?.data?.skipped ?? null;
 
-  const duplicates =
-    processed?.duplicates ?? j?.duplicates ?? j?.data?.duplicates ?? null;
+  const duplicates = processed?.duplicates ?? j?.duplicates ?? j?.data?.duplicates ?? null;
 
   const errors =
     processed?.errors ??
@@ -218,6 +224,25 @@ function readinessFromCounts({ rows, inserted, accepted, errors }) {
   return "ready";
 }
 
+// ✅ derive realistic UI status from counts
+function deriveUploadUi({ ok, rows, acceptedLike, errors }, t) {
+  const r = toNum(rows) ?? 0;
+  const a = toNum(acceptedLike) ?? 0;
+  const e = toNum(errors) ?? 0;
+
+  // buckets: ok | warn | error
+  if (!ok || e > 0) {
+    return { tone: "error", title: t.err, icon: "❌" };
+  }
+  if (a > 0) {
+    return { tone: "ok", title: t.okProcessed, icon: "✅" };
+  }
+  if (r > 0 && a === 0) {
+    return { tone: "warn", title: t.okNoAccepted, icon: "⚠️" };
+  }
+  return { tone: "warn", title: t.okNoRows, icon: "⚠️" };
+}
+
 export default function UploadCsv({ lang = "ar", onUploaded }) {
   const t = useMemo(() => TXT[lang] || TXT.en, [lang]);
   const isRTL = lang === "ar";
@@ -237,7 +262,10 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
   const result = useMemo(() => normalizeUploadResult(resultRaw), [resultRaw]);
 
   const rows = result?.rows ?? null;
-  const inserted = result?.inserted ?? result?.accepted ?? null;
+  const inserted = result?.inserted ?? null;
+  const acceptedFallback = result?.accepted ?? null;
+  const acceptedLike = inserted ?? acceptedFallback ?? 0;
+
   const rejected = result?.rejected ?? null;
   const skipped = result?.skipped ?? null;
   const duplicates = result?.duplicates ?? null;
@@ -246,11 +274,11 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
   const readiness = useMemo(() => {
     return readinessFromCounts({
       rows,
-      inserted: result?.inserted,
-      accepted: result?.accepted,
+      inserted,
+      accepted: acceptedFallback,
       errors: errorsCount,
     });
-  }, [rows, result?.inserted, result?.accepted, errorsCount]);
+  }, [rows, inserted, acceptedFallback, errorsCount]);
 
   const readinessLabel =
     readiness === "ready"
@@ -258,6 +286,18 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
       : readiness === "needsReview"
       ? t.needsReview
       : t.empty;
+
+  const uiStatus = useMemo(() => {
+    return deriveUploadUi(
+      {
+        ok: !!(resultRaw?.ok ?? true),
+        rows,
+        acceptedLike,
+        errors: errorsCount,
+      },
+      t
+    );
+  }, [resultRaw, rows, acceptedLike, errorsCount, t]);
 
   async function upload() {
     setError("");
@@ -286,7 +326,6 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
       const now = isoNow();
       setUploadedAt(now);
 
-      // Send normalized summary up (single source of truth for "last upload")
       if (typeof onUploaded === "function") {
         const norm = normalizeUploadResult(j);
         onUploaded({
@@ -349,15 +388,14 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
             disabled={busy}
             onChange={(e) => {
               setFile(e.target.files?.[0] || null);
-              // مهم: لا نمسح نتيجة الرفع تلقائياً كي لا يحصل تداخل/اختفاء مفاجئ
               setError("");
             }}
           />
           {file?.name ? (
             <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-              <b>{t.fileName}:</b>{" "}
-              <span className="mono">{file.name}</span>{" "}
-              • <b>{t.fileSize}:</b> <span className="mono">{fmtBytes(file.size)}</span>
+              <b>{t.fileName}:</b> <span className="mono">{file.name}</span> •{" "}
+              <b>{t.fileSize}:</b>{" "}
+              <span className="mono">{fmtBytes(file.size)}</span>
             </div>
           ) : null}
         </div>
@@ -377,14 +415,17 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
 
       {error ? (
         <div className="muted" style={{ marginTop: 12 }}>
-          <strong>{t.err}:</strong> {error}
+          <strong>{t.err}</strong> {error}
         </div>
       ) : null}
 
-      {/* Stable post-upload summary (no overlap) */}
+      {/* Stable post-upload summary (REALISTIC) */}
       {resultRaw ? (
         <div className="banner" style={{ marginTop: 12 }}>
-          <div className="bannerTitle">✅ {t.ok}</div>
+          {/* ✅ realistic headline instead of always "success" */}
+          <div className="bannerTitle">
+            {uiStatus.icon} {uiStatus.title}
+          </div>
 
           <div className="bannerGrid">
             <div className="bannerBox">
@@ -397,16 +438,12 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
 
               <div>
                 <span style={{ opacity: 0.8 }}>{t.fileName}: </span>
-                <span className="mono">
-                  {file?.name ?? result?.fileName ?? "—"}
-                </span>
+                <span className="mono">{file?.name ?? result?.fileName ?? "—"}</span>
               </div>
 
               <div>
                 <span style={{ opacity: 0.8 }}>{t.fileSize}: </span>
-                <span className="mono">
-                  {fmtBytes(file?.size ?? result?.sizeBytes)}
-                </span>
+                <span className="mono">{fmtBytes(file?.size ?? result?.sizeBytes)}</span>
               </div>
 
               <div>
@@ -418,8 +455,7 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
                 <div style={{ marginTop: 6, opacity: 0.92 }}>
                   <span style={{ opacity: 0.8 }}>{t.dateRange}: </span>
                   <span className="mono">
-                    {safeText(result?.dateRange?.start)} →{" "}
-                    {safeText(result?.dateRange?.end)}
+                    {safeText(result?.dateRange?.start)} → {safeText(result?.dateRange?.end)}
                   </span>
                 </div>
               ) : null}
@@ -448,45 +484,41 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
                 <div className="mini">
                   <div className="miniRow">
                     <span className="miniKey">{t.tests}</span>
-                    <span className="miniVal">{inserted ?? 0}</span>
+                    <span className="miniVal">{toNum(acceptedLike) ?? 0}</span>
                   </div>
                 </div>
 
                 <div className="mini">
                   <div className="miniRow">
                     <span className="miniKey">{t.rejected}</span>
-                    <span className="miniVal">{rejected ?? 0}</span>
+                    <span className="miniVal">{toNum(rejected) ?? 0}</span>
                   </div>
                 </div>
 
                 <div className="mini">
                   <div className="miniRow">
                     <span className="miniKey">{t.duplicates}</span>
-                    <span className="miniVal">{duplicates ?? 0}</span>
+                    <span className="miniVal">{toNum(duplicates) ?? 0}</span>
                   </div>
                 </div>
 
                 <div className="mini">
                   <div className="miniRow">
                     <span className="miniKey">{t.skipped}</span>
-                    <span className="miniVal">{skipped ?? 0}</span>
+                    <span className="miniVal">{toNum(skipped) ?? 0}</span>
                   </div>
                 </div>
 
                 <div className="mini">
                   <div className="miniRow">
                     <span className="miniKey">{t.errors}</span>
-                    <span className="miniVal">{errorsCount ?? 0}</span>
+                    <span className="miniVal">{toNum(errorsCount) ?? 0}</span>
                   </div>
                 </div>
               </div>
 
               <div className="actions" style={{ justifyContent: "flex-start", marginTop: 10 }}>
-                <button
-                  className="ghostBtn"
-                  type="button"
-                  onClick={() => setShowDetails((s) => !s)}
-                >
+                <button className="ghostBtn" type="button" onClick={() => setShowDetails((s) => !s)}>
                   {showDetails ? t.hideDetails : t.showDetails}
                 </button>
               </div>

@@ -9,82 +9,10 @@ function normCode(x) {
   return String(x || "").trim().toUpperCase();
 }
 
-function pickBand(bands, ageYears) {
-  const a = typeof ageYears === "number" ? ageYears : Number(ageYears);
-  if (!Number.isFinite(a)) return null;
-  return (bands || []).find((b) => a >= b.min && a <= b.max) || null;
-}
-
-// Hb anemia rule (kept)
-function anemiaThresholdHb(ageYears, sex) {
-  const age = typeof ageYears === "number" && Number.isFinite(ageYears) ? ageYears : null;
-  const s = String(sex || "U").toUpperCase();
-  if (age !== null && age >= 5 && age <= 14) return 11.5;
-  if (age !== null && age >= 15) {
-    if (s === "F") return 12.0;
-    if (s === "M") return 13.0;
-    return 11.5;
-  }
-  return 11.0;
-}
-
-function buildCaseDef({ signalType, testCode }) {
-  const st = String(signalType || "").toLowerCase();
-  const tc = normCode(testCode);
-
-  // anemia / Hb special-case
-  if (st === "anemia" || tc === "HB" || tc === "HGB") {
-    return {
-      direction: "low",
-      isCase: (value, row) => {
-        const thr = anemiaThresholdHb(row?.ageYears, row?.sex);
-        return value < thr;
-      },
-    };
-  }
-
-  const cfg = CLINICAL?.[tc] || null;
-  if (!cfg) return null;
-
-  const dir = String(cfg.direction || "high").toLowerCase() === "low" ? "low" : "high";
-
-  return {
-    direction: dir,
-    isCase: (value, row) => {
-      const band = pickBand(cfg.bands, row?.ageYears);
-      if (!band) return false;
-      if (dir === "high") {
-        const u = typeof band.upper === "number" ? band.upper : null;
-        if (u == null) return false;
-        return value > u;
-      }
-      const l = typeof band.lower === "number" ? band.lower : null;
-      if (l == null) return false;
-      return value < l;
-    },
-  };
-}
-
-function getWeekKey(d) {
-  const x = dayjs(d);
-  const y = x.isoWeekYear();
-  const w = String(x.isoWeek()).padStart(2, "0");
-  return `${y}-W${w}`;
-}
-
 function safeNum(v) {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
-}
-
-function extractValue(row) {
-  // prefer universal value, fallback to legacy hb
-  const v = safeNum(row?.value);
-  if (v != null) return v;
-  const hb = safeNum(row?.hb);
-  if (hb != null) return hb;
-  return null;
 }
 
 function mean(arr) {
@@ -99,13 +27,157 @@ function std(arr) {
   return Math.sqrt(v);
 }
 
+function getWeekKey(d) {
+  const x = dayjs(d);
+  const y = x.isoWeekYear();
+  const w = String(x.isoWeek()).padStart(2, "0");
+  return `${y}-W${w}`;
+}
+
+// Accept both shapes: {start,end} OR {from,to}
+function normalizeTimeRange(timeRange) {
+  if (!timeRange) return null;
+  const from = timeRange.from || timeRange.start || null;
+  const to = timeRange.to || timeRange.end || null;
+  return { from, to };
+}
+
+function inRange(dt, timeRange) {
+  const tr = normalizeTimeRange(timeRange);
+  if (!tr) return true;
+  const x = dayjs(dt);
+  const from = tr.from ? dayjs(tr.from) : null;
+  const to = tr.to ? dayjs(tr.to) : null;
+  if (from && x.isBefore(from, "day")) return false;
+  if (to && x.isAfter(to, "day")) return false;
+  return true;
+}
+
+function ageToDays(row) {
+  const ad = safeNum(row?.ageDays);
+  if (ad != null) return Math.max(0, Math.round(ad));
+  const ay = safeNum(row?.ageYears);
+  if (ay != null) return Math.max(0, Math.round(ay * 365.25));
+  return null;
+}
+
+// Supports both band formats:
+// - new: {minDays,maxDays}
+// - old: {min,max} (ageYears)
+function pickBand(bands, ageDays, ageYears) {
+  if (!Array.isArray(bands)) return null;
+
+  if (ageDays != null) {
+    const b = bands.find(
+      (x) =>
+        typeof x.minDays === "number" &&
+        typeof x.maxDays === "number" &&
+        ageDays >= x.minDays &&
+        ageDays <= x.maxDays
+    );
+    if (b) return b;
+  }
+
+  if (ageYears != null) {
+    const b = bands.find(
+      (x) =>
+        typeof x.min === "number" &&
+        typeof x.max === "number" &&
+        ageYears >= x.min &&
+        ageYears <= x.max
+    );
+    if (b) return b;
+  }
+
+  return null;
+}
+
+function resolveClinicalConfig(testCode) {
+  const tc = normCode(testCode);
+
+  // direct
+  if (CLINICAL?.[tc] && !CLINICAL[tc]?.aliasOf) return { tc, cfg: CLINICAL[tc] };
+
+  // aliasOf
+  if (CLINICAL?.[tc]?.aliasOf) {
+    const base = normCode(CLINICAL[tc].aliasOf);
+    if (CLINICAL?.[base]) return { tc: base, cfg: CLINICAL[base] };
+  }
+
+  // aliases array
+  for (const [k, cfg] of Object.entries(CLINICAL || {})) {
+    const aliases = (cfg?.aliases || []).map(normCode);
+    if (aliases.includes(tc)) return { tc: k, cfg };
+  }
+
+  return { tc, cfg: null };
+}
+
+function buildCaseDef({ testCode }) {
+  const { tc, cfg } = resolveClinicalConfig(testCode);
+  if (!cfg) return null;
+
+  const dirRaw = String(cfg.direction || "both").toLowerCase();
+  const dir = dirRaw === "high" || dirRaw === "low" || dirRaw === "both" ? dirRaw : "both";
+
+  return {
+    direction: dir, // low/high/both
+    unit: cfg.unit || null,
+    testCode: tc,
+
+    classify(value, row) {
+      const v = safeNum(value);
+      if (v == null) return null;
+
+      const sex = String(row?.sex || "U").toUpperCase();
+      const ageDays = ageToDays(row);
+      const ageYears = safeNum(row?.ageYears);
+
+      const bands =
+        cfg?.sexBands?.[sex] && Array.isArray(cfg.sexBands[sex]) && cfg.sexBands[sex].length
+          ? cfg.sexBands[sex]
+          : cfg.bands;
+
+      const band = pickBand(bands, ageDays, ageYears);
+      if (!band) return null;
+
+      const lower = typeof band.lower === "number" ? band.lower : null;
+      const upper = typeof band.upper === "number" ? band.upper : null;
+
+      const isLow = lower != null ? v < lower : false;
+      const isHigh = upper != null ? v > upper : false;
+
+      if (dir === "low") return isLow ? "low" : null;
+      if (dir === "high") return isHigh ? "high" : null;
+
+      if (isLow) return "low";
+      if (isHigh) return "high";
+      return null;
+    },
+  };
+}
+
+function extractValue(row) {
+  const v = safeNum(row?.value);
+  if (v != null) return v;
+  const r = safeNum(row?.result);
+  if (r != null) return r;
+  const hb = safeNum(row?.hb); // legacy fallback
+  if (hb != null) return hb;
+  return null;
+}
+
 /**
- * ✅ Generic EWMA over weekly CASE rate.
- * rows must contain: { testDate, value (or hb), ageYears, sex, testCode? }
+ * ✅ Generic EWMA over weekly out-of-range rate.
+ *
+ * NEW:
+ * - direction "both" supported via classify()
+ * - mode: "total" | "high" | "low"
+ * - timeRange accepts {start,end} or {from,to}
  */
 function computeSignalEwma({
   rows,
-  signalType = "anemia",
+  signalType = null, // kept for compatibility with your router
   testCode = "HB",
   lambda = 0.3,
   L = 3,
@@ -113,9 +185,14 @@ function computeSignalEwma({
   lang = "both",
   preset = "standard",
   timeRange = null,
+  mode = "total",
 }) {
-  const caseDef = buildCaseDef({ signalType, testCode });
+  const tc = normCode(testCode);
+  const caseDef = buildCaseDef({ testCode: tc });
+
   if (!caseDef) {
+    const msgAr = "لا توجد عتبات سريرية معرفة لهذا الفحص بعد.";
+    const msgEn = "No clinical thresholds defined for this test yet.";
     return {
       ewma: {
         lambda,
@@ -126,15 +203,11 @@ function computeSignalEwma({
         sigmaZ: null,
         UCL: null,
         direction: null,
-        testCode: normCode(testCode),
+        mode,
+        testCode: tc,
         points: [],
       },
-      interpretation:
-        lang === "both"
-          ? { ar: "لا توجد عتبات سريرية معرفة لهذا الفحص بعد.", en: "No clinical thresholds defined for this test yet." }
-          : lang === "ar"
-          ? "لا توجد عتبات سريرية معرفة لهذا الفحص بعد."
-          : "No clinical thresholds defined for this test yet.",
+      interpretation: lang === "both" ? { ar: msgAr, en: msgEn } : lang === "ar" ? msgAr : msgEn,
     };
   }
 
@@ -143,34 +216,45 @@ function computeSignalEwma({
   for (const r of rows || []) {
     const dt = r?.testDate || r?.collectedAt;
     if (!dt) continue;
+    if (!inRange(dt, timeRange)) continue;
 
     // enforce testCode if present in row
     const rowCode = r?.testCode ? normCode(r.testCode) : null;
-    if (rowCode && normCode(testCode) && rowCode !== normCode(testCode)) continue;
+    if (rowCode && rowCode !== tc) continue;
 
     const v = extractValue(r);
     if (v == null) continue;
 
     const wk = getWeekKey(dt);
-    if (!byWeek.has(wk)) byWeek.set(wk, { n: 0, cases: 0 });
+    if (!byWeek.has(wk)) byWeek.set(wk, { n: 0, low: 0, high: 0 });
     const g = byWeek.get(wk);
 
     g.n += 1;
-    if (caseDef.isCase(v, r)) g.cases += 1;
+    const cls = caseDef.classify(v, r);
+    if (cls === "low") g.low += 1;
+    if (cls === "high") g.high += 1;
   }
 
   const weeks = Array.from(byWeek.keys()).sort();
   const points = weeks.map((wk) => {
     const g = byWeek.get(wk);
-    const rate = g.n > 0 ? g.cases / g.n : 0;
+    const n = g.n || 0;
+    const lowRate = n ? g.low / n : 0;
+    const highRate = n ? g.high / n : 0;
+
+    let rate = 0;
+    if (mode === "high") rate = highRate;
+    else if (mode === "low") rate = lowRate;
+    else rate = n ? (g.low + g.high) / n : 0;
+
     return {
       week: wk,
-      n: g.n,
-      low: caseDef.direction === "low" ? g.cases : 0,
-      lowRate: caseDef.direction === "low" ? rate : 0,
-      high: caseDef.direction === "high" ? g.cases : 0,
-      highRate: caseDef.direction === "high" ? rate : 0,
-      rate,
+      n,
+      low: g.low,
+      lowRate,
+      high: g.high,
+      highRate,
+      rate, // used by EWMA
     };
   });
 
@@ -183,12 +267,13 @@ function computeSignalEwma({
   const sigmaZ = Math.sqrt((lambda / (2 - lambda)) * (baselineStd ** 2));
   const UCL = baselineMean + L * (sigmaZ || 0);
 
-  // EWMA
+  // EWMA on chosen rate
   let z = baselineMean;
   const outPoints = points.map((p, idx) => {
     if (idx === 0) z = baselineMean;
     z = lambda * p.rate + (1 - lambda) * z;
     const alert = sigmaZ > 0 ? z > UCL : false;
+
     return {
       week: p.week,
       n: p.n,
@@ -196,6 +281,7 @@ function computeSignalEwma({
       lowRate: p.lowRate,
       high: p.high,
       highRate: p.highRate,
+      rate: p.rate,
       z: Number(z.toFixed(4)),
       alert,
     };
@@ -203,41 +289,47 @@ function computeSignalEwma({
 
   const last = outPoints[outPoints.length - 1] || null;
 
+  const modeLabelEn =
+    mode === "high" ? "HIGH-only" : mode === "low" ? "LOW-only" : "out-of-range (LOW+HIGH)";
+  const modeLabelAr =
+    mode === "high" ? "مرتفع فقط" : mode === "low" ? "منخفض فقط" : "خارج المجال (منخفض+مرتفع)";
+
   const interpEn =
     !outPoints.length
-      ? `No data available for ${normCode(testCode)}.`
-      : `EWMA tracked weekly ${caseDef.direction.toUpperCase()}-case rate for ${normCode(
-          testCode
-        )}. Latest week ${last.week} has ${last.n} tests; alert=${last.alert ? "YES" : "NO"}.`;
+      ? `No data available for ${tc}.`
+      : `EWMA tracked weekly ${modeLabelEn} rate for ${tc}. Latest week ${last.week} has ${last.n} tests; alert=${
+          last.alert ? "YES" : "NO"
+        }.`;
 
   const interpAr =
     !outPoints.length
-      ? `لا توجد بيانات للفحص ${normCode(testCode)}.`
-      : `تم تتبع EWMA لمعدل الحالات (${caseDef.direction === "high" ? "مرتفع" : "منخفض"}) أسبوعيًا للفحص ${normCode(
-          testCode
-        )}. آخر أسبوع ${last.week} عدد الفحوصات ${last.n}؛ إنذار=${last.alert ? "نعم" : "لا"}.`;
+      ? `لا توجد بيانات للفحص ${tc}.`
+      : `تم تتبع EWMA لمعدل ${modeLabelAr} أسبوعيًا للفحص ${tc}. آخر أسبوع ${last.week} عدد الفحوصات ${last.n}؛ إنذار=${
+          last.alert ? "نعم" : "لا"
+        }.`;
 
   return {
     ewma: {
       lambda,
       L,
       baselineWeeksUsed: baseSlice.length,
-      baselineMean: Number((baselineMean ?? 0).toFixed(4)),
-      baselineStd: Number((baselineStd ?? 0).toFixed(4)),
-      sigmaZ: Number((sigmaZ ?? 0).toFixed(4)),
-      UCL: Number((UCL ?? 0).toFixed(4)),
+      baselineMean: Number((baselineMean ?? 0).toFixed(6)),
+      baselineStd: Number((baselineStd ?? 0).toFixed(6)),
+      sigmaZ: Number((sigmaZ ?? 0).toFixed(6)),
+      UCL: Number((UCL ?? 0).toFixed(6)),
       direction: caseDef.direction,
-      testCode: normCode(testCode),
+      mode,
+      testCode: tc,
       points: outPoints,
+      meta: { unit: caseDef.unit || null, preset },
     },
-    interpretation:
-      lang === "both" ? { ar: interpAr, en: interpEn } : lang === "ar" ? interpAr : interpEn,
+    interpretation: lang === "both" ? { ar: interpAr, en: interpEn } : lang === "ar" ? interpAr : interpEn,
   };
 }
 
-// Backward-compatible wrapper
+// Backward-compatible wrapper (keeps your router happy)
 function computeAnemiaEwma(args) {
-  return computeSignalEwma({ ...args, signalType: "anemia", testCode: "HB" });
+  return computeSignalEwma({ ...args, testCode: "HB" });
 }
 
 module.exports = { computeSignalEwma, computeAnemiaEwma };
