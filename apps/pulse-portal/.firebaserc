@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "pulse-482504"
-  }
+    "default": "pulse-482504",
+    "pulse-482504": "pulse-482504"
+  },
+  "targets": {},
+  "etags": {}
 }
