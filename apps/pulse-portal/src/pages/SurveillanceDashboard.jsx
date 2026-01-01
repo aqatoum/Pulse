@@ -291,12 +291,6 @@ const styles = `
 /* =========================
    ✅ Trend + Confidence helpers
    ========================= */
-
-/**
- * computeTrendFromWeekly:
- * - يستخدم آخر 6 نقاط (3 أولى مقابل 3 أخيرة)
- * - يرجع: up/down/flat/no_data
- */
 function computeTrendFromWeekly(weekly) {
   const w = Array.isArray(weekly) ? weekly : [];
   const series = w
@@ -315,19 +309,9 @@ function computeTrendFromWeekly(weekly) {
   return "flat";
 }
 
-/**
- * Trend fallback (مهم):
- * backend عندك غالبًا لا يرسل weekly.
- * هذا fallback يشتق Trend من نتائج الطرق المتاحة بدون كسر.
- *
- * - CUSUM: لو كان يرسل rate داخل points (أحيانًا نعم)
- * - EWMA: يستخدم z كبديل لاتجاه عام (ليس معدل حالات، لكنه إشارة اتجاه)
- * - Farrington: يستخدم cases كاتجاه للأعداد
- */
 function trendFromResults(results) {
   const r = results || {};
 
-  // (1) CUSUM rate if exists
   const cPts = r?.cusum?.points;
   if (Array.isArray(cPts) && cPts.length) {
     const rateSeries = cPts
@@ -337,7 +321,6 @@ function trendFromResults(results) {
     if (k !== "no_data") return k;
   }
 
-  // (2) EWMA z fallback
   const ePts = r?.ewma?.points;
   if (Array.isArray(ePts) && ePts.length) {
     const zSeries = ePts
@@ -347,7 +330,6 @@ function trendFromResults(results) {
     if (k !== "no_data") return k;
   }
 
-  // (3) Farrington cases fallback
   const fPts = r?.farrington?.points;
   if (Array.isArray(fPts) && fPts.length) {
     const casesSeries = fPts
@@ -404,11 +386,6 @@ function deriveDecisionFromResults(results) {
   return "info";
 }
 
-/**
- * computeUiDecision:
- * - يعتمد على consensus أولاً (الأصح)
- * - لكنه "يحمي" الحالة التي يكون فيها consensus=alert بناءً على طريقة واحدة فقط
- */
 function computeUiDecision(runData) {
   const d = normDecision(runData?.consensus?.decision);
 
@@ -431,7 +408,6 @@ function listMethodAlerts(runData) {
     if (lvl === "alert") out.push(k.toUpperCase());
   }
 
-  // fallback: derive from points
   if (!out.length) {
     const r = runData?.results || {};
     if (lastPointHasAlert(r.ewma)) out.push("EWMA");
@@ -518,11 +494,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const [endDate, setEndDate] = useState("");
   const [preset, setPreset] = useState("standard");
 
-  /**
-   * ملاحظة:
-   * UI advanced غير ظاهر، لكننا نرسل advanced=1 مع قيم preset
-   * لضمان نفس سلوك الحساب داخل الباك-إند وعدم كسر التوافق.
-   */
   const [ewmaLambda, setEwmaLambda] = useState(PRESETS.standard.ewma.lambda);
   const [ewmaL, setEwmaL] = useState(PRESETS.standard.ewma.L);
   const [ewmaBaselineN, setEwmaBaselineN] = useState(PRESETS.standard.ewma.baselineN);
@@ -534,7 +505,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const [farringtonBaselineWeeks, setFarringtonBaselineWeeks] = useState(PRESETS.standard.farrington.baselineWeeks);
   const [farringtonZ, setFarringtonZ] = useState(PRESETS.standard.farrington.z);
 
-  // تحديث قيم preset تلقائيًا
   useEffect(() => {
     const p = PRESETS[preset] || PRESETS.standard;
     setEwmaLambda(p.ewma.lambda);
@@ -563,6 +533,16 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const [showDetails, setShowDetails] = useState(false);
 
   const abortRef = useRef(null);
+
+  // ✅ NEW: readiness (precheck)
+  const [readiness, setReadiness] = useState({
+    loading: false,
+    ok: true,
+    overallN: null,
+    weeksCoverage: null,
+    perMethod: null,
+    error: null,
+  });
 
   // Health ping
   useEffect(() => {
@@ -611,7 +591,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     if (preset) params.set("preset", preset);
     if (testCode) params.set("testCode", String(testCode));
 
-    // ✅ advanced mode ON (بدون UI) لضمان التوافق
+    // advanced mode ON (بدون UI)
     params.set("advanced", "1");
 
     params.set("ewmaLambda", String(clampNum(ewmaLambda, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max)));
@@ -639,13 +619,65 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       : `${t.modeRegion}: ${regionId?.trim() || t.notAvailable}`;
   }
 
+  // ✅ NEW: precheck fetcher
+  async function fetchPrecheck(signal) {
+    const params = buildScopeQuery();
+    params.set("testCode", String(testCode));
+
+    setReadiness((r) => ({ ...r, loading: true, error: null }));
+
+    try {
+      const j = await fetchJSON(`${apiBase}/api/analytics/precheck?${params.toString()}`, signal);
+      const d = j?.data || null;
+
+      setReadiness({
+        loading: false,
+        ok: true,
+        overallN: typeof d?.overallN === "number" ? d.overallN : null,
+        weeksCoverage: typeof d?.weeksCoverage === "number" ? d.weeksCoverage : null,
+        perMethod: d?.perMethod || null,
+        error: null,
+      });
+
+      // UX: إذا Farrington غير جاهز نطفئه تلقائيًا حتى لا يوهم المستخدم
+      const fOk = d?.perMethod?.farrington?.ok;
+      if (fOk === false) {
+        setMethods((prev) => ({ ...prev, farrington: false }));
+      }
+    } catch (e) {
+      // لا نكسر الصفحة إذا فشل precheck لأي سبب
+      setReadiness((r) => ({
+        ...r,
+        loading: false,
+        ok: false,
+        error: String(e?.message || e),
+      }));
+    }
+  }
+
+  // ✅ NEW: run precheck on inputs change (debounced)
+  useEffect(() => {
+    const controller = new AbortController();
+    const id = setTimeout(() => {
+      fetchPrecheck(controller.signal);
+    }, 350);
+
+    return () => {
+      try {
+        controller.abort();
+      } catch {}
+      clearTimeout(id);
+    };
+  }, [scopeMode, facilityId, regionId, testCode, startDate, endDate, preset]); // preset ليس ضروريًا لكنه آمن
+
   /**
    * ✅ RUN:
    * - يطلب /run ثم /report
-   * - يبني chartsPayload بشكل متوافق مع adapt* الموجودة عندك
+   * - يمنع التشغيل إذا لا توجد بيانات
+   * - ويشغّل فقط الطرق الجاهزة (خصوصًا Farrington)
    */
   async function runAnalysis() {
-    const m = selectedMethods();
+    let m = selectedMethods();
     if (!m.length) return;
 
     if (scopeMode === "facility" && !facilityId.trim()) {
@@ -654,6 +686,29 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     }
     if (scopeMode === "region" && !regionId.trim()) {
       setErrMsg(t.requiredRegion);
+      return;
+    }
+
+    // ✅ منع التشغيل إذا precheck يقول NO DATA
+    if (readiness?.overallN === 0) {
+      setErrMsg(
+        lang === "ar"
+          ? "لا توجد بيانات للفلاتر الحالية. جرّب توسيع الفترة أو رفع ملف بيانات."
+          : "No data for the current filters. Try expanding the date range or uploading data."
+      );
+      return;
+    }
+
+    // ✅ فلترة الطرق غير الجاهزة (حتى لو المستخدم فعّلها)
+    const pm = readiness?.perMethod || {};
+    m = m.filter((k) => pm?.[k]?.ok !== false);
+
+    if (!m.length) {
+      setErrMsg(
+        lang === "ar"
+          ? "لا توجد طرق جاهزة للتشغيل بناءً على جاهزية البيانات الحالية."
+          : "No methods are ready to run for the current data readiness."
+      );
       return;
     }
 
@@ -693,7 +748,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
       const results = runPayload?.results || {};
 
-      // chartsPayload: نفس البنية التي كنت تستخدمها سابقًا
       setChartsPayload({
         ewma: results?.ewma ? { data: { ewma: results.ewma } } : null,
         cusum: results?.cusum ? { data: { cusum: results.cusum } } : null,
@@ -714,7 +768,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       const finalReport = (extracted?.trim() ? extracted : "").trim();
       setReportText(finalReport || t.insufficient);
 
-      // ✅ لو report رجّع consensus أحدث، نحدث runData
       const repConsensus = repJ?.data?.meta?.consensus || repJ?.data?.meta?.meta?.consensus || null;
       if (repConsensus) {
         setRunData((prev) => {
@@ -769,7 +822,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const decisionKey = theme.key;
   const methodAlerts = listMethodAlerts(runData);
 
-  // weekly may not exist → fallback on results
   const weekly = runData?.meta?.weekly || runData?.meta?.meta?.weekly || runData?.weekly || null;
   const trendKey = weekly ? computeTrendFromWeekly(weekly) : trendFromResults(runData?.results);
 
@@ -790,7 +842,10 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const faCfg = adaptFarrington(chartsPayload?.farrington);
 
   const presetLabel = preset === "low" ? t.presetLow : preset === "high" ? t.presetHigh : t.presetStandard;
-  const canRunNow = !loading;
+
+  // ✅ NEW: Run disabled when no data / precheck loading
+  const noData = readiness?.overallN === 0;
+  const canRunNow = !loading && !readiness.loading && !noData;
 
   const profile = runData?.profile || null;
   const profileInsight = runData?.profileInsight || null;
@@ -804,9 +859,11 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const overallRate = pickRate(profile?.overall);
   const overallCases = pickCases(profile?.overall);
 
-  // Farrington data sufficiency message (seasonal mode)
-  const fSuff = runData?.results?.farrington?.dataSufficiency || null;
-  const fDisabled = !!(fSuff && fSuff.ok === false);
+  // ✅ NEW: Farrington readiness from precheck first, then fallback
+  const fReady = readiness?.perMethod?.farrington?.ok ?? (runData?.results?.farrington?.dataSufficiency?.ok ?? true);
+  const fDisabled = fReady === false;
+  const fReason =
+    readiness?.perMethod?.farrington?.reason || runData?.results?.farrington?.dataSufficiency?.reason || null;
 
   const whyText = (() => {
     const parts = [];
@@ -868,9 +925,15 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               const dr = payload?.dateRange;
               if (dr?.start || dr?.end) setDataRange(dr);
 
+              // ✅ refresh health time
               fetchJSON(`${apiBase}/health`)
                 .then((hj) => setLastUpdated(hj?.time || hj?.timestamp || null))
                 .catch(() => {});
+
+              // ✅ trigger precheck after upload (direct)
+              try {
+                fetchPrecheck();
+              } catch {}
             }}
           />
         </div>
@@ -878,15 +941,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         <div className="formRow" style={{ marginTop: 12 }}>
           <div className="field">
             <label>{t.scope}</label>
-            <Dropdown
-              dir={isRTL ? "rtl" : "ltr"}
-              value={scopeMode}
-              onChange={(v) => setScopeMode(v)}
-              options={getScopeOptions(t)}
-            />
+            <Dropdown dir={isRTL ? "rtl" : "ltr"} value={scopeMode} onChange={(v) => setScopeMode(v)} options={getScopeOptions(t)} />
           </div>
 
-          {/* ✅ حذفنا زر تقرير الرفعات بالكامل */}
           <div className="actions" style={{ alignSelf: "end" }} />
         </div>
 
@@ -984,10 +1041,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        <div
-          className="methodRow"
-          style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 6 }}
-        >
+        <div className="methodRow" style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 6 }}>
           <div className="field" style={{ flex: 1 }}>
             <label>{t.methods}</label>
             <div className="chips" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -997,10 +1051,32 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               <button type="button" className={`chipBtn ${methods.cusum ? "chipBtnOn" : ""}`} onClick={() => toggleMethod("cusum")}>
                 CUSUM
               </button>
-              <button type="button" className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""}`} onClick={() => toggleMethod("farrington")}>
+
+              {/* ✅ NEW: Farrington disabled when not ready */}
+              <button
+                type="button"
+                className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""}`}
+                onClick={() => !fDisabled && toggleMethod("farrington")}
+                disabled={fDisabled}
+                title={
+                  fDisabled
+                    ? lang === "ar"
+                      ? `Farrington غير متاح الآن: ${String(fReason || "INSUFFICIENT_DATA")}`
+                      : `Farrington unavailable: ${String(fReason || "INSUFFICIENT_DATA")}`
+                    : ""
+                }
+                style={fDisabled ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
+              >
                 Farrington
               </button>
             </div>
+
+            {/* ✅ NEW: small readiness hint */}
+            {readiness.loading ? (
+              <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+                {lang === "ar" ? "جاري فحص جاهزية البيانات…" : "Checking data readiness…"}
+              </div>
+            ) : null}
           </div>
 
           <div className="actions">
@@ -1012,7 +1088,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               {loading ? "…" : t.run}
             </button>
 
-            {/* ✅ FIX: لا تسمح بالـ reset أثناء التحميل لتجنب تعارض الحالة */}
             <button type="button" className="ghostBtn" onClick={resetRun} disabled={loading}>
               Reset
             </button>
@@ -1023,11 +1098,20 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
+        {/* ✅ NEW: explicit "no data" message */}
+        {noData ? (
+          <div className="muted" style={{ marginTop: 10 }}>
+            {lang === "ar"
+              ? "لا توجد بيانات للفلاتر الحالية. جرّب توسيع الفترة أو رفع ملف بيانات."
+              : "No data for the current filters. Try expanding the date range or uploading data."}
+          </div>
+        ) : null}
+
         {errMsg ? (
           <div className="muted" style={{ marginTop: 10 }}>
             {t.error} {safeText(errMsg)}
             <div style={{ marginTop: 8 }}>
-              <button type="button" className="ghostBtn" onClick={runAnalysis}>
+              <button type="button" className="ghostBtn" onClick={runAnalysis} disabled={!canRunNow}>
                 {t.retry}
               </button>
             </div>
@@ -1038,7 +1122,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           <div className="mini">
             <div className="miniRow">
               <div className="miniKey">{t.dataset}</div>
-              <div className="miniVal">{dataset}</div>
+              <div className="miniVal">{lastUpload?.ok ? t.uploadOk : t.notAvailable}</div>
             </div>
             <div className="miniRow">
               <div className="miniKey">{t.scope}</div>
@@ -1138,17 +1222,13 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                     <b>{t.actions}</b> — {actionsText}
                   </div>
 
-                  {/* ✅ IMPORTANT: seasonal Farrington data sufficiency message */}
+                  {/* ✅ NEW: Farrington message based on precheck */}
                   {fDisabled ? (
                     <div style={{ marginTop: 2, opacity: 0.92 }}>
                       <b>{lang === "ar" ? "معلومة:" : "Info:"}</b>{" "}
                       {lang === "ar"
-                        ? `Farrington الموسمي يحتاج تغطية زمنية كافية (عادة 52 أسبوعًا). تم تعطيل إنذارات هذه الطريقة بسبب: ${String(
-                            fSuff?.reason || "INSUFFICIENT_DATA"
-                          )}.`
-                        : `Seasonal Farrington requires sufficient time coverage (typically 52 weeks). Alerts are disabled for this method due to: ${String(
-                            fSuff?.reason || "INSUFFICIENT_DATA"
-                          )}.`}
+                        ? `Farrington الموسمي غير متاح حاليًا بسبب: ${String(fReason || "INSUFFICIENT_DATA")}.`
+                        : `Seasonal Farrington is currently unavailable due to: ${String(fReason || "INSUFFICIENT_DATA")}.`}
                     </div>
                   ) : null}
 
@@ -1219,11 +1299,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                     </div>
 
                     {insightText ? (
-                      <div
-                        className="reportBox2"
-                        style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }}
-                        dir={isRTL ? "rtl" : "ltr"}
-                      >
+                      <div className="reportBox2" style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }} dir={isRTL ? "rtl" : "ltr"}>
                         {insightText}
                       </div>
                     ) : null}
