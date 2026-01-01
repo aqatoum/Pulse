@@ -390,6 +390,26 @@ function withScopeTop(scopeRes) {
 }
 
 /* ===============================
+   ✅ QUALITY ROW NORMALIZER (NEW)
+   Makes scanRowsQuality robust even if upstream field names vary.
+   =============================== */
+function normalizeRowForQuality(r) {
+  const value =
+    r?.value ?? r?.result ?? r?.resultValue ?? r?.valueNum ?? r?.numericValue ?? r?.val;
+
+  const testDate =
+    r?.testDate ?? r?.collectedAt ?? r?.date ?? r?.resultDate ?? r?.collectionDate ?? r?.sampleDate;
+
+  const sex =
+    r?.sex ?? r?.gender ?? r?.patientSex ?? r?.sexCode;
+
+  const ageYears =
+    r?.ageYears ?? r?.age ?? r?.age_years ?? r?.patientAgeYears;
+
+  return { ...r, value, testDate, sex, ageYears };
+}
+
+/* ===============================
    ✅ Load rows for ANY testCode
    =============================== */
 async function loadSignalRows({ scope, dateFilter, testCode }) {
@@ -506,9 +526,15 @@ router.get("/anemia-profile", async (req, res) => {
     const testCode = normCode(req.query.testCode || defaultTestCodeForSignal(signal));
 
     const dateFilter = getDateRangeFilter(req);
-    const { rows, dateRange, rawCount } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
+    const { rows, dateRange, rawCount } = await loadSignalRows({
+      scope: scopeRes.scope,
+      dateFilter,
+      testCode,
+    });
 
-    const dataQualityScan = scanRowsQuality({ rows, rawCount });
+    // ✅ NEW: robust quality scan input
+    const rowsForQuality = (rows || []).map(normalizeRowForQuality);
+    const dataQualityScan = scanRowsQuality({ rows: rowsForQuality, rawCount });
 
     const out =
       signal === "anemia"
@@ -571,7 +597,10 @@ router.get("/run", async (req, res) => {
     }
 
     const { rows, dateRange, rawCount } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
-    const dataQualityScan = scanRowsQuality({ rows, rawCount });
+
+    // ✅ NEW: robust quality scan input
+    const rowsForQuality = (rows || []).map(normalizeRowForQuality);
+    const dataQualityScan = scanRowsQuality({ rows: rowsForQuality, rawCount });
 
     const results = {};
     const interpretations = {};
@@ -754,7 +783,10 @@ router.get("/report", async (req, res) => {
     }
 
     const { rows, dateRange, rawCount } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
-    const dataQualityScan = scanRowsQuality({ rows, rawCount });
+
+    // ✅ NEW: robust quality scan input
+    const rowsForQuality = (rows || []).map(normalizeRowForQuality);
+    const dataQualityScan = scanRowsQuality({ rows: rowsForQuality, rawCount });
 
     const results = {};
     const interpretationsForConsensus = {};

@@ -1,13 +1,18 @@
 import React, { useMemo, useState } from "react";
 
 /**
- * UploadCsv.jsx — Professional single upload center
+ * UploadCsv.jsx — Professional single upload center (FIXED)
+ * ✅ Fixes the “accepted = 0 / no usable data” bug by treating Cloud Run ingest response as source of truth:
+ *   - data.ingest.totalRows
+ *   - data.ingest.accepted
+ *   - data.ingest.rejected
+ *   - data.ingest.issues (summed as errors)
+ *
  * - One upload area only
  * - Clear, stable post-upload summary (no overlap)
- * - Realistic status banner (success / uploaded but unusable / failed)
+ * - Realistic status banner (success / needs review / empty / failed)
  * - Readiness badge (Ready / Needs review / Empty)
- * - Normalizes backend responses across shapes
- * - Calls onUploaded(normalized) so Dashboard can show ONE banner globally if needed
+ * - Calls onUploaded(normalized)
  */
 
 const TXT = {
@@ -20,7 +25,6 @@ const TXT = {
     replace: "استبدال بملف جديد",
     clear: "مسح نتيجة الرفع",
 
-    // status headlines (more realistic)
     okProcessed: "تم رفع الملف ومعالجة البيانات بنجاح",
     okNoAccepted: "تم رفع الملف، لكن لم يتم قبول أي صف. راجع تنسيق الأعمدة والقيم.",
     okNoRows: "تم رفع الملف، لكن لم يتم العثور على صفوف قابلة للقراءة.",
@@ -32,7 +36,6 @@ const TXT = {
     fileSize: "حجم الملف",
     rows: "إجمالي الصفوف",
     tests: "الصفوف المقبولة",
-    inserted: "تمت إضافتها",
     accepted: "مقبول",
     rejected: "مرفوض",
     skipped: "متجاهلة",
@@ -69,7 +72,6 @@ const TXT = {
     fileSize: "File size",
     rows: "Total rows",
     tests: "Accepted rows",
-    inserted: "Inserted",
     accepted: "Accepted",
     rejected: "Rejected",
     skipped: "Skipped",
@@ -118,20 +120,36 @@ function isoNow() {
   return new Date().toISOString();
 }
 
+function sumIssueCounts(issues) {
+  if (!issues || typeof issues !== "object") return 0;
+  return Object.values(issues).reduce((a, b) => a + Number(b || 0), 0);
+}
+
 /**
- * Normalize upload response across multiple backend shapes.
+ * ✅ Normalize upload response across multiple backend shapes.
+ * Supports your current Cloud Run response:
+ *  - analysis.params.rowsParsed
+ *  - analysis.params.fileName
+ *  - data.upload.{uploadId,sha256,fileName}
+ *  - data.ingest.{totalRows,accepted,rejected,issues{...}}
  */
 function normalizeUploadResult(j) {
   if (!j || typeof j !== "object") return null;
 
+  const ingest = j?.data?.ingest || j?.ingest || null;
+  const issues = ingest?.issues || null;
+
   const facilityId =
-    j.facilityId ??
+    j?.facilityId ??
     j?.data?.facilityId ??
     j?.analysis?.params?.facilityId ??
-    j?.data?.ingest?.facilityId ??
+    ingest?.facilityId ??
     null;
 
   const fileName =
+    j?.analysis?.params?.fileName ??
+    j?.data?.upload?.fileName ??
+    j?.data?.upload?.originalFileName ??
     j?.file?.originalName ??
     j?.file?.name ??
     j?.data?.file?.originalName ??
@@ -139,6 +157,7 @@ function normalizeUploadResult(j) {
     null;
 
   const sizeBytes =
+    j?.analysis?.params?.sizeBytes ??
     j?.file?.sizeBytes ??
     j?.file?.size ??
     j?.data?.file?.sizeBytes ??
@@ -146,6 +165,7 @@ function normalizeUploadResult(j) {
     null;
 
   const sha256 =
+    j?.data?.upload?.sha256 ??
     j?.file?.sha256 ??
     j?.sha256 ??
     j?.data?.file?.sha256 ??
@@ -159,40 +179,48 @@ function normalizeUploadResult(j) {
     j?.data?.analysis?.dateRange ??
     null;
 
-  const processed = j?.processed ?? j?.data?.processed ?? null;
-
+  // ✅ Source of truth for Cloud Run: ingest.totalRows
   const rows =
-    processed?.rows ??
+    ingest?.totalRows ??
+    j?.analysis?.params?.rowsParsed ??
+    j?.processed?.rows ??
     j?.rows ??
     j?.data?.rows ??
-    j?.analysis?.params?.rowsParsed ??
-    j?.data?.ingest?.rowsParsed ??
     null;
 
-  const inserted =
-    processed?.inserted ??
-    j?.inserted ??
-    j?.insertedCount ??
-    j?.data?.inserted ??
-    j?.data?.insertedCount ??
+  // ✅ Source of truth for Cloud Run: ingest.accepted / ingest.rejected
+  const accepted =
+    ingest?.accepted ??
+    j?.processed?.accepted ??
+    j?.accepted ??
+    j?.data?.accepted ??
+    j?.data?.ingest?.summary?.accepted ??
+    j?.ingest?.summary?.accepted ??
     null;
 
-  const skipped = processed?.skipped ?? j?.skipped ?? j?.data?.skipped ?? null;
+  const rejected =
+    ingest?.rejected ??
+    j?.processed?.rejected ??
+    j?.rejected ??
+    j?.data?.rejected ??
+    j?.data?.ingest?.summary?.rejected ??
+    j?.ingest?.summary?.rejected ??
+    null;
 
-  const duplicates = processed?.duplicates ?? j?.duplicates ?? j?.data?.duplicates ?? null;
-
+  // ✅ errors = sum(issues) when present (Cloud Run)
   const errors =
-    processed?.errors ??
-    j?.errors ??
-    j?.errorsCount ??
-    j?.data?.errors ??
-    j?.data?.errorsCount ??
-    null;
+    issues && typeof issues === "object"
+      ? sumIssueCounts(issues)
+      : j?.processed?.errors ??
+        j?.errors ??
+        j?.errorsCount ??
+        j?.data?.errors ??
+        j?.data?.errorsCount ??
+        0;
 
-  // Old ingest summary fallback
-  const summary = j?.data?.ingest?.summary ?? j?.ingest?.summary ?? null;
-  const accepted = summary?.accepted ?? null;
-  const rejected = summary?.rejected ?? null;
+  // optional (may not exist in your API)
+  const skipped = j?.processed?.skipped ?? j?.skipped ?? j?.data?.skipped ?? 0;
+  const duplicates = j?.processed?.duplicates ?? j?.duplicates ?? j?.data?.duplicates ?? 0;
 
   return {
     facilityId,
@@ -201,45 +229,45 @@ function normalizeUploadResult(j) {
     sha256,
     dateRange,
     rows,
-    inserted,
+    accepted,
+    rejected,
     skipped,
     duplicates,
     errors,
-    accepted,
-    rejected,
     raw: j,
   };
 }
 
-function readinessFromCounts({ rows, inserted, accepted, errors }) {
+/**
+ * ✅ Correct readiness logic
+ * - empty: rows == 0 (no readable rows)
+ * - needsReview: rows > 0 but accepted == 0 OR errors > 0
+ * - ready: accepted > 0 and errors == 0
+ */
+function readinessFromCounts({ rows, accepted, errors }) {
   const r = toNum(rows) ?? 0;
-  const i = toNum(inserted);
-  const a = toNum(accepted);
+  const a = toNum(accepted) ?? 0;
   const e = toNum(errors) ?? 0;
 
-  const okCount = (i ?? a ?? 0);
-
-  if (r <= 0 || okCount <= 0) return "empty";
+  if (r === 0) return "empty";
+  if (a === 0) return "needsReview";
   if (e > 0) return "needsReview";
   return "ready";
 }
 
-// ✅ derive realistic UI status from counts
-function deriveUploadUi({ ok, rows, acceptedLike, errors }, t) {
+// ✅ derive realistic UI status from counts (accepted is truth)
+function deriveUploadUi({ ok, rows, accepted, errors }, t) {
   const r = toNum(rows) ?? 0;
-  const a = toNum(acceptedLike) ?? 0;
+  const a = toNum(accepted) ?? 0;
   const e = toNum(errors) ?? 0;
 
-  // buckets: ok | warn | error
-  if (!ok || e > 0) {
-    return { tone: "error", title: t.err, icon: "❌" };
-  }
-  if (a > 0) {
-    return { tone: "ok", title: t.okProcessed, icon: "✅" };
-  }
-  if (r > 0 && a === 0) {
-    return { tone: "warn", title: t.okNoAccepted, icon: "⚠️" };
-  }
+  if (!ok) return { tone: "error", title: t.err, icon: "❌" };
+
+  // upload ok, but quality issues exist
+  if (a > 0 && e > 0) return { tone: "warn", title: t.needsReview, icon: "⚠️" };
+
+  if (a > 0) return { tone: "ok", title: t.okProcessed, icon: "✅" };
+  if (r > 0 && a === 0) return { tone: "warn", title: t.okNoAccepted, icon: "⚠️" };
   return { tone: "warn", title: t.okNoRows, icon: "⚠️" };
 }
 
@@ -262,42 +290,30 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
   const result = useMemo(() => normalizeUploadResult(resultRaw), [resultRaw]);
 
   const rows = result?.rows ?? null;
-  const inserted = result?.inserted ?? null;
-  const acceptedFallback = result?.accepted ?? null;
-  const acceptedLike = inserted ?? acceptedFallback ?? 0;
-
-  const rejected = result?.rejected ?? null;
-  const skipped = result?.skipped ?? null;
-  const duplicates = result?.duplicates ?? null;
-  const errorsCount = result?.errors ?? null;
+  const accepted = result?.accepted ?? 0; // ✅ truth
+  const rejected = result?.rejected ?? 0;
+  const skipped = result?.skipped ?? 0;
+  const duplicates = result?.duplicates ?? 0;
+  const errorsCount = result?.errors ?? 0;
 
   const readiness = useMemo(() => {
-    return readinessFromCounts({
-      rows,
-      inserted,
-      accepted: acceptedFallback,
-      errors: errorsCount,
-    });
-  }, [rows, inserted, acceptedFallback, errorsCount]);
+    return readinessFromCounts({ rows, accepted, errors: errorsCount });
+  }, [rows, accepted, errorsCount]);
 
   const readinessLabel =
-    readiness === "ready"
-      ? t.ready
-      : readiness === "needsReview"
-      ? t.needsReview
-      : t.empty;
+    readiness === "ready" ? t.ready : readiness === "needsReview" ? t.needsReview : t.empty;
 
   const uiStatus = useMemo(() => {
     return deriveUploadUi(
       {
         ok: !!(resultRaw?.ok ?? true),
         rows,
-        acceptedLike,
+        accepted,
         errors: errorsCount,
       },
       t
     );
-  }, [resultRaw, rows, acceptedLike, errorsCount, t]);
+  }, [resultRaw, rows, accepted, errorsCount, t]);
 
   async function upload() {
     setError("");
@@ -328,17 +344,18 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
 
       if (typeof onUploaded === "function") {
         const norm = normalizeUploadResult(j);
+
         onUploaded({
           ok: true,
           at: now,
           facilityId: norm?.facilityId ?? null,
           processed: {
             rows: norm?.rows ?? null,
-            accepted: norm?.inserted ?? norm?.accepted ?? null,
-            rejected: norm?.rejected ?? null,
-            skipped: norm?.skipped ?? null,
-            duplicates: norm?.duplicates ?? null,
-            errors: norm?.errors ?? null,
+            accepted: norm?.accepted ?? 0, // ✅ FIXED (was inserted fallback)
+            rejected: norm?.rejected ?? 0,
+            skipped: norm?.skipped ?? 0,
+            duplicates: norm?.duplicates ?? 0,
+            errors: norm?.errors ?? 0,
           },
           dateRange: norm?.dateRange ?? null,
           file: {
@@ -394,8 +411,7 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
           {file?.name ? (
             <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
               <b>{t.fileName}:</b> <span className="mono">{file.name}</span> •{" "}
-              <b>{t.fileSize}:</b>{" "}
-              <span className="mono">{fmtBytes(file.size)}</span>
+              <b>{t.fileSize}:</b> <span className="mono">{fmtBytes(file.size)}</span>
             </div>
           ) : null}
         </div>
@@ -422,7 +438,6 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
       {/* Stable post-upload summary (REALISTIC) */}
       {resultRaw ? (
         <div className="banner" style={{ marginTop: 12 }}>
-          {/* ✅ realistic headline instead of always "success" */}
           <div className="bannerTitle">
             {uiStatus.icon} {uiStatus.title}
           </div>
@@ -484,7 +499,7 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
                 <div className="mini">
                   <div className="miniRow">
                     <span className="miniKey">{t.tests}</span>
-                    <span className="miniVal">{toNum(acceptedLike) ?? 0}</span>
+                    <span className="miniVal">{toNum(accepted) ?? 0}</span>
                   </div>
                 </div>
 
@@ -531,7 +546,7 @@ export default function UploadCsv({ lang = "ar", onUploaded }) {
                     padding: 12,
                     borderRadius: 12,
                     border: "1px solid rgba(255,255,255,0.12)",
-                    background: "rgba(0,0,0,0.20)",
+                    background: "rgba(0,0,0,0.2)",
                     whiteSpace: "pre-wrap",
                     overflow: "auto",
                     fontSize: 12,
