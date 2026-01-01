@@ -1,3 +1,4 @@
+// apps/pulse-api/src/routes/analytics.precheck.routes.js
 const express = require("express");
 const dayjs = require("dayjs");
 const isoWeek = require("dayjs/plugin/isoWeek");
@@ -19,7 +20,10 @@ function normCode(x) {
 function normalizeTimeRange({ startDate, endDate } = {}) {
   const from = startDate ? dayjs(startDate) : null;
   const to = endDate ? dayjs(endDate) : null;
-  return { from, to };
+  return {
+    from: from && from.isValid() ? from : null,
+    to: to && to.isValid() ? to : null,
+  };
 }
 
 function resolveClinicalConfig(testCode) {
@@ -43,9 +47,11 @@ function resolveClinicalConfig(testCode) {
   return { tc, cfg: null };
 }
 
-function getWeekKeyFromParts(isoYear, isoWeekNum) {
-  const w = String(isoWeekNum).padStart(2, "0");
-  return `${isoYear}-W${w}`;
+function getWeekKey(d) {
+  const x = dayjs(d);
+  const y = x.isoWeekYear();
+  const w = String(x.isoWeek()).padStart(2, "0");
+  return `${y}-W${w}`;
 }
 
 function weekKeyToStartDate(weekKey) {
@@ -55,13 +61,6 @@ function weekKeyToStartDate(weekKey) {
   const w = Number(m[2]);
   if (!Number.isFinite(y) || !Number.isFinite(w)) return null;
   return dayjs().isoWeekYear(y).isoWeek(w).startOf("isoWeek"); // Monday
-}
-
-function getWeekKey(d) {
-  const x = dayjs(d);
-  const y = x.isoWeekYear();
-  const w = String(x.isoWeek()).padStart(2, "0");
-  return `${y}-W${w}`;
 }
 
 function fillMissingWeeksFromKeys(keysSorted) {
@@ -83,15 +82,11 @@ function fillMissingWeeksFromKeys(keysSorted) {
 
 /**
  * GET /api/analytics/precheck
- * نفس باراميترات scope الأساسية المستخدمة في run/report:
- * - scopeMode implicit: facilityId/regionId (optional)
- * - startDate/endDate (optional)
- * - testCode (optional)
- *
- * Returns:
- * - overallN: عدد السجلات المطابقة (لنفس testCode والفلاتر)
- * - weeksCoverage: عدد الأسابيع بعد تعبئة الفراغات
- * - perMethod readiness for ewma/cusum/farrington
+ * Parameters:
+ * - facilityId / regionId (optional)
+ * - startDate / endDate (optional)
+ * - testCode (optional, default HB)
+ * - minWeeksCoverage (optional, default 52)
  */
 router.get("/precheck", async (req, res) => {
   try {
@@ -101,56 +96,62 @@ router.get("/precheck", async (req, res) => {
       startDate,
       endDate,
       testCode = "HB",
-      // Farrington requirements (keep defaults aligned with your service)
       minWeeksCoverage = "52",
     } = req.query;
 
     const { from, to } = normalizeTimeRange({ startDate, endDate });
-    const tc = normCode(testCode);
+    const tcReq = normCode(testCode);
 
-    // thresholds exist?
-    const { tc: baseTc, cfg: clinicalCfg } = resolveClinicalConfig(tc);
+    const { tc: baseTc, cfg: clinicalCfg } = resolveClinicalConfig(tcReq);
     const hasThresholds = !!clinicalCfg;
 
-    // Mongo match
+    // ===== match =====
     const match = {};
 
     if (facilityId) match.facilityId = String(facilityId).trim();
     if (regionId) match.regionId = String(regionId).trim();
 
-    // date field: prefer testDate then collectedAt
-    // match: require at least one date exists
+    // date: prefer testDate then collectedAt
+    const dateExpr = { $ifNull: ["$testDate", "$collectedAt"] };
+
+    // require at least one date exists
     match.$or = [{ testDate: { $ne: null } }, { collectedAt: { $ne: null } }];
 
-    // testCode match (if stored)
-    // your run code allows row.testCode missing; but in DB it’s usually there
-    match.testCode = { $in: [tc, baseTc] };
+    // IMPORTANT:
+    // - لا تقصّي السجلات إذا testCode مفقود (مثل سلوك run عندك)
+    // - اقبل tcReq أو baseTc أو null/empty
+    match.$and = match.$and || [];
+    match.$and.push({
+      $or: [
+        { testCode: { $in: [tcReq, baseTc] } },
+        { testCode: { $exists: false } },
+        { testCode: null },
+        { testCode: "" },
+      ],
+    });
 
-    // range match using $expr to apply on chosen date
-    const dateExpr = { $ifNull: ["$testDate", "$collectedAt"] };
+    // date range filter via $expr
     const exprAnd = [];
-
     if (from) exprAnd.push({ $gte: [dateExpr, from.toDate()] });
     if (to) exprAnd.push({ $lte: [dateExpr, to.toDate()] });
+    if (exprAnd.length) match.$expr = { $and: exprAnd };
 
-    if (exprAnd.length) {
-      match.$expr = { $and: exprAnd };
-    }
-
-    // Pipeline: count + weeks grouping
+    // ===== pipeline =====
+    // بدل $isoWeek / $isoWeekYear (قد لا تكون مدعومة عند بعض النسخ)
+    // نستخدم $dateToParts مع iso8601: true (أكثر توافقًا)
     const pipeline = [
       { $match: match },
+      { $project: { dt: dateExpr } },
+
+      // toParts gives isoWeekYear/isoWeek when iso8601=true
       {
         $project: {
-          dt: dateExpr,
+          parts: { $dateToParts: { date: "$dt", iso8601: true } },
         },
       },
       {
         $group: {
-          _id: {
-            isoYear: { $isoWeekYear: "$dt" },
-            isoWeek: { $isoWeek: "$dt" },
-          },
+          _id: { isoYear: "$parts.isoWeekYear", isoWeek: "$parts.isoWeek" },
           n: { $sum: 1 },
         },
       },
@@ -184,7 +185,6 @@ router.get("/precheck", async (req, res) => {
 
     const overallN = byWeek.reduce((s, x) => s + (Number(x.n) || 0), 0);
 
-    // per-method readiness
     const perMethod = {
       ewma: { ok: overallN > 0 },
       cusum: { ok: overallN > 0 },
@@ -199,7 +199,9 @@ router.get("/precheck", async (req, res) => {
       perMethod.farrington = { ok: false, reason: "NO_THRESHOLDS" };
     } else {
       const minW = Number(minWeeksCoverage);
-      if (weeksCoverage < minW) {
+      if (!Number.isFinite(minW) || minW <= 0) {
+        perMethod.farrington = { ok: true, weeksCoverage };
+      } else if (weeksCoverage < minW) {
         perMethod.farrington = {
           ok: false,
           reason: "INSUFFICIENT_WEEKS_COVERAGE",
@@ -211,15 +213,13 @@ router.get("/precheck", async (req, res) => {
       }
     }
 
-    const data = {
+    return apiOk(res, {
       testCode: baseTc,
       overallN,
       weeksCoverage,
       hasThresholds,
       perMethod,
-    };
-
-    return apiOk(res, data);
+    });
   } catch (e) {
     return apiError(res, e?.message || String(e));
   }
