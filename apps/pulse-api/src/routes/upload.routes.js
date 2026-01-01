@@ -107,11 +107,15 @@ router.post("/csv", upload.single("file"), async (req, res) => {
       );
     }
 
+    // ✅ IMPORTANT: tolerate BOM and different line endings
     const csvText = buf.toString("utf-8");
+
     const records = parse(csvText, {
+      bom: true,
       columns: (header) => header.map(normalizeHeader),
       skip_empty_lines: true,
       trim: true,
+      relax_column_count: true,
     });
 
     if (!records.length) {
@@ -157,25 +161,43 @@ router.post("/csv", upload.single("file"), async (req, res) => {
     }
 
     // ✅ Create Upload record first (audit trail)
-    // IMPORTANT: make arrays explicit so mongoose won't mis-cast defaults.
     const uploadDoc = await Upload.create({
       originalFileName: req.file.originalname,
       fileName: req.file.originalname,
       mimeType: req.file.mimetype,
       sizeBytes: req.file.size,
       sha256: fileHash,
-      rowsParsed: records.length,
       source: "CSV",
       uploadedAt: new Date(),
 
+      // compatibility fields used by /api/uploads/report
+      rowsTotal: 0,
+      accepted: 0,
+      rejected: 0,
+      ignored: 0,
+      errors: 0,
+      duplicates: 0,
+      totalTests: 0,
+      facilityId: null,
+      regionId: null,
+      dateRange: { start: null, end: null },
+
+      // keep arrays too
       facilityIds: [],
       regionIds: [],
       labIds: [],
+
+      // keep existing fields (if your model uses them)
+      rowsParsed: 0,
+      rowsAccepted: 0,
+      rowsRejected: 0,
     });
 
     let total = 0;
     let accepted = 0;
     let rejected = 0;
+    let duplicates = 0;
+    const ignored = 0; // reserved (if you later add ignore rules)
 
     const issues = {
       invalidDate: 0,
@@ -193,6 +215,10 @@ router.post("/csv", upload.single("file"), async (req, res) => {
     const regionSet = new Set();
     const labSet = new Set();
 
+    // track date range for accepted rows
+    let minDate = null;
+    let maxDate = null;
+
     for (const r of records) {
       total++;
 
@@ -200,6 +226,7 @@ router.post("/csv", upload.single("file"), async (req, res) => {
       if (hasNew) {
         const testCode = normalizeTestCode(r.testcode);
         const value = toNumber(r.value);
+
         const collectedAt = toDate(r.collectedat || r.testdate);
 
         const ageYears = toNumber(r.ageyears);
@@ -248,12 +275,19 @@ router.post("/csv", upload.single("file"), async (req, res) => {
 
         // dedupe within file
         const key = `${facilityId || ""}|${regionId || ""}|${labId || ""}|${testCode}|${collectedAt.toISOString()}|${sex}|${ageYears}|${value}`;
-        if (seen.has(key)) continue;
+        if (seen.has(key)) {
+          duplicates++;
+          continue;
+        }
         seen.add(key);
 
         if (facilityId) facilitySet.add(facilityId);
         if (regionId) regionSet.add(regionId);
         if (labId) labSet.add(labId);
+
+        // date range
+        if (!minDate || collectedAt < minDate) minDate = collectedAt;
+        if (!maxDate || collectedAt > maxDate) maxDate = collectedAt;
 
         docs.push({
           uploadId: uploadDoc._id,
@@ -314,10 +348,16 @@ router.post("/csv", upload.single("file"), async (req, res) => {
         const { year, isoWeek, yearWeek } = getISOWeekInfo(testDate);
 
         const key = `${facilityId || ""}|HB|${testDate.toISOString()}|${sex}|${ageYears}|${hb}`;
-        if (seen.has(key)) continue;
+        if (seen.has(key)) {
+          duplicates++;
+          continue;
+        }
         seen.add(key);
 
         if (facilityId) facilitySet.add(facilityId);
+
+        if (!minDate || testDate < minDate) minDate = testDate;
+        if (!maxDate || testDate > maxDate) maxDate = testDate;
 
         docs.push({
           uploadId: uploadDoc._id,
@@ -363,19 +403,51 @@ router.post("/csv", upload.single("file"), async (req, res) => {
       console.warn("weeklyAgg update skipped/failed:", e?.message || e);
     }
 
-    // ✅ update Upload record (match Upload model fields)
+    // compute errors for report compatibility
+    const errorCount =
+      issues.invalidDate +
+      issues.invalidValue +
+      issues.invalidAge +
+      issues.invalidTestCode +
+      issues.missingUnit;
+
+    // choose scalar facility/region if single, else leave null (GLOBAL)
+    const facilityIdsArr = Array.from(facilitySet);
+    const regionIdsArr = Array.from(regionSet);
+    const labIdsArr = Array.from(labSet);
+
+    const scalarFacility = facilityIdsArr.length === 1 ? facilityIdsArr[0] : null;
+    const scalarRegion = regionIdsArr.length === 1 ? regionIdsArr[0] : null;
+
+    // ✅ update Upload record (write BOTH naming styles)
     await Upload.updateOne(
       { _id: uploadDoc._id },
       {
         $set: {
+          // old/internal fields
           rowsParsed: total,
           rowsAccepted: accepted,
           rowsRejected: rejected,
-          facilityIds: Array.from(facilitySet),
-          regionIds: Array.from(regionSet),
-          labIds: Array.from(labSet),
+          facilityIds: facilityIdsArr,
+          regionIds: regionIdsArr,
+          labIds: labIdsArr,
           quality: issues,
           completedAt: new Date(),
+
+          // report/UI fields expected by /api/uploads/report
+          rowsTotal: total,
+          accepted,
+          rejected,
+          ignored,
+          errors: errorCount,
+          duplicates,
+          totalTests: accepted, // approximate: accepted rows represent tests
+          facilityId: scalarFacility,
+          regionId: scalarRegion,
+          dateRange: {
+            start: minDate ? minDate.toISOString() : null,
+            end: maxDate ? maxDate.toISOString() : null,
+          },
         },
       }
     );
@@ -401,6 +473,8 @@ router.post("/csv", upload.single("file"), async (req, res) => {
             totalRows: total,
             accepted,
             rejected,
+            duplicates,
+            errors: errorCount,
             issues,
           },
           weeklyAggregates: weeklyAgg,
@@ -416,15 +490,6 @@ router.post("/csv", upload.single("file"), async (req, res) => {
   }
 });
 
-/* =========================================================
-   GET /api/upload/report
-   تقرير كامل:
-   - totals: files, tests, facilities, regions
-   - byTest: counts per testCode (clean + includes unknown)
-   - facilities: top facilities by rows
-   - regions: top regions by rows
-   - uploads: last uploads snapshot (optional helpful)
-   ========================================================= */
 router.get("/report", async (req, res) => {
   try {
     const files = await Upload.countDocuments();
@@ -433,18 +498,12 @@ router.get("/report", async (req, res) => {
     const facilityIds = await LabResult.distinct("facilityId", { facilityId: { $ne: null } });
     const regionIds = await LabResult.distinct("regionId", { regionId: { $ne: null } });
 
-    // ✅ byTest: ensure null/empty test codes appear as "UNKNOWN"
     const byTest = await LabResult.aggregate([
       {
         $project: {
           testCodeNorm: {
             $cond: [
-              {
-                $or: [
-                  { $eq: ["$testCode", null] },
-                  { $eq: ["$testCode", ""] },
-                ],
-              },
+              { $or: [{ $eq: ["$testCode", null] }, { $eq: ["$testCode", ""] }] },
               "UNKNOWN",
               { $toUpper: "$testCode" },
             ],
@@ -484,7 +543,6 @@ router.get("/report", async (req, res) => {
       { $limit: 500 },
     ]);
 
-    // recent uploads snapshot (helps debug + UI)
     const uploads = await Upload.find({})
       .sort({ createdAt: -1 })
       .limit(50)
@@ -495,6 +553,16 @@ router.get("/report", async (req, res) => {
         rowsParsed: 1,
         rowsAccepted: 1,
         rowsRejected: 1,
+        rowsTotal: 1,
+        accepted: 1,
+        rejected: 1,
+        ignored: 1,
+        errors: 1,
+        duplicates: 1,
+        totalTests: 1,
+        facilityId: 1,
+        regionId: 1,
+        dateRange: 1,
         facilityIds: 1,
         regionIds: 1,
         labIds: 1,
