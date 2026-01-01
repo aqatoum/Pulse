@@ -52,7 +52,7 @@ export const TXT = {
     presetLow: "منخفضة",
     presetStandard: "قياسية",
     presetHigh: "عالية",
-    quickHigh: "رفع الحساسية (High)",
+    
     advanced: "إعدادات متقدمة",
     advancedOn: "تفعيل الإعدادات المتقدمة",
     advancedOff: "إيقاف المتقدمة (رجوع للـ Preset)",
@@ -180,7 +180,7 @@ export const TXT = {
     presetLow: "Low",
     presetStandard: "Standard",
     presetHigh: "High",
-    quickHigh: "High sensitivity",
+    
     advanced: "Advanced settings",
     advancedOn: "Enable advanced",
     advancedOff: "Disable advanced (use preset)",

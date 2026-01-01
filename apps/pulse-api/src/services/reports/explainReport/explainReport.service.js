@@ -144,7 +144,7 @@ function generateExplanationReport({
         "معلومات التقرير",
         `تاريخ الإنشاء: ${isoNow()}`,
         `الجهة/المركز: ${facilityId || "—"}`,
-        `النطاق الزمني: ${timeRange || "—"}`,
+        `النطاق الزمني: ${new Date().toLocaleString("ar-JO")}`
         `مستوى التجميع: ${aggregation === "Weekly" ? "أسبوعي" : aggregation}`,
         `الفحص: ${testCode || "—"} • الإشارة: ${signalType || "—"}`,
         `الطرق المستخدمة: ${methodsLine}`,
@@ -153,7 +153,7 @@ function generateExplanationReport({
         "Report info",
         `Generated: ${isoNow()}`,
         `Facility: ${facilityId || "—"}`,
-        `Time range: ${timeRange || "—"}`,
+        `Time range: ${timeRange ? timeRange : "All available data"}`,
         `Aggregation: ${aggregation}`,
         `Test: ${testCode || "—"} • Signal: ${signalType || "—"}`,
         `Methods: ${methodsLine}`,

@@ -421,6 +421,27 @@ function listMethodAlerts(runData) {
 
   return out;
 }
+function formatDate(value, lang) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+
+  return lang === "ar"
+    ? d.toLocaleString("ar-EG", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : d.toLocaleString("en-GB", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+}
 
 /* =========================
    ✅ Strat UI Card
@@ -475,9 +496,6 @@ function StratCard({ title, items, getKey, t }) {
    ✅ Precheck helpers
    ========================= */
 function normalizePrecheck(resp) {
-  // يقبل عدة أشكال دون كسر
-  // المتوقع:
-  // { ok:true, overallN, weeksCoverage, dateRange:{start,end}, perMethod:{farrington:{ok,reason}} }
   const d = resp?.data ?? resp ?? {};
   const meta = d?.meta ?? d?.readiness ?? d ?? {};
 
@@ -526,22 +544,31 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const t = useMemo(() => TXT[lang] || TXT.en, [lang]);
   const isRTL = lang === "ar";
 
-  const rawBase =
-  import.meta.env.VITE_API_BASE_URL ||
-  import.meta.env.VITE_API_URL ||
-  "http://localhost:8080"; // خليه 8080 لأنه بملف server.js عندك
+  const rawBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://localhost:8080";
+  const apiBase = String(rawBase).replace(/\/+$/, "");
 
-// ✅ توحيد: apiBase بدون سلاش في النهاية
-const apiBase = String(rawBase).replace(/\/+$/, "");
+  function apiUrl(path) {
+    const p = String(path || "");
+    if (p.startsWith("/api/")) return `${apiBase}${p}`;
+    if (p.startsWith("/")) return `${apiBase}/api${p}`;
+    return `${apiBase}/api/${p}`;
+  }
 
-// ✅ helper: يضمن وجود /api دائماً (ويمنع تكراره)
-function apiUrl(path) {
-  const p = String(path || "");
-  if (p.startsWith("/api/")) return `${apiBase}${p}`;
-  if (p.startsWith("/")) return `${apiBase}/api${p}`;
-  return `${apiBase}/api/${p}`;
-}
-
+  // ✅ Safe fetch wrapper: supports fetchJSON(url) and fetchJSON(url, signal)
+  async function fetchJSONSafe(url, signal) {
+    try {
+      return await fetchJSON(url, signal);
+    } catch (e) {
+      if (signal) {
+        try {
+          return await fetchJSON(url);
+        } catch (e2) {
+          throw e2;
+        }
+      }
+      throw e;
+    }
+  }
 
   // ✅ Scope
   const [scopeMode, setScopeMode] = useState("global");
@@ -551,7 +578,6 @@ function apiUrl(path) {
   // ✅ Test selection
   const [testCode, setTestCode] = useState("HB");
   const derivedSignal = useMemo(() => getSignalForTest(testCode), [testCode]);
-  const derivedSignalLabel = useMemo(() => getSignalForTest(testCode), [testCode]); // kept (compat)
   const derivedSignalLabelText = useMemo(() => getSignalLabel(t, derivedSignal), [t, derivedSignal]);
 
   // ✅ Methods
@@ -589,6 +615,7 @@ function apiUrl(path) {
   }, [preset]);
 
   const [loading, setLoading] = useState(false);
+
   const [runData, setRunData] = useState(null);
   const [reportText, setReportText] = useState("");
   const [errMsg, setErrMsg] = useState("");
@@ -603,17 +630,24 @@ function apiUrl(path) {
 
   const abortRef = useRef(null);
 
-  // ✅ Precheck state (NEW)
+  // ✅ Precheck state
   const [hasChecked, setHasChecked] = useState(false);
-  const [readiness, setReadiness] = useState({ loading: false, ok: null, reason: null, overallN: null, weeksCoverage: null });
+  const [readiness, setReadiness] = useState({
+    loading: false,
+    ok: null,
+    reason: null,
+    overallN: null,
+    weeksCoverage: null,
+    dateRange: null,
+    perMethod: null,
+  });
 
   // Health ping
   useEffect(() => {
     let cancelled = false;
     async function loadHealth() {
       try {
-        const j = await fetchJSON(apiUrl("/health"));
-
+        const j = await fetchJSONSafe(apiUrl("/health"));
         if (!cancelled) setLastUpdated(j?.time || j?.timestamp || null);
       } catch {}
     }
@@ -624,6 +658,10 @@ function apiUrl(path) {
   }, [apiBase]);
 
   function toggleMethod(key) {
+    if (!hasChecked) {
+      setErrMsg(lang === "ar" ? "اضغط «فحص البيانات» أولًا." : "Please click “Check data” first.");
+      return;
+    }
     setMethods((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
@@ -682,9 +720,8 @@ function apiUrl(path) {
       : `${t.modeRegion}: ${regionId?.trim() || t.notAvailable}`;
   }
 
-  // ✅ Manual Precheck (NEW) — user must click
+  // ✅ Manual Precheck
   async function loadReadiness() {
-    // abort previous request
     if (abortRef.current) {
       try {
         abortRef.current.abort();
@@ -704,9 +741,7 @@ function apiUrl(path) {
       p.set("lang", "both");
       p.set("_ts", String(Date.now()));
 
-      // Endpoint المقترح: /api/analytics/precheck
-      // إن لم يكن موجودًا، لن يكسر الواجهة (يظهر سبب PRECHECK_UNAVAILABLE)
-      const j = await fetchJSON(`${apiBase}/api/analytics/precheck?${p.toString()}`, controller.signal);
+      const j = await fetchJSONSafe(`${apiUrl("/analytics/precheck")}?${p.toString()}`, controller.signal);
       const r = normalizePrecheck(j);
 
       const weeksCoverage = typeof r.weeksCoverage === "number" ? r.weeksCoverage : null;
@@ -724,12 +759,10 @@ function apiUrl(path) {
 
       setHasChecked(true);
 
-      // ✅ تعطيل Farrington فورًا إذا أقل من 52 أسبوع
       if (typeof weeksCoverage === "number" && weeksCoverage < 52) {
         setMethods((prev) => ({ ...prev, farrington: false }));
       }
 
-      // Update date range UI if returned
       if (r.dateRange?.start || r.dateRange?.end) setDataRange(r.dateRange);
     } catch (e) {
       setReadiness({
@@ -745,11 +778,6 @@ function apiUrl(path) {
     }
   }
 
-  /**
-   * ✅ RUN:
-   * - لا يعمل قبل precheck
-   * - يستبعد Farrington تلقائيًا إذا غير متاح
-   */
   async function runAnalysis() {
     const m0 = selectedMethods();
     if (!m0.length) return;
@@ -763,13 +791,11 @@ function apiUrl(path) {
       return;
     }
 
-    // ✅ must precheck first
     if (!hasChecked) {
       setErrMsg(lang === "ar" ? "اضغط «فحص البيانات» أولًا." : "Please click “Check data” first.");
       return;
     }
 
-    // abort previous request
     if (abortRef.current) {
       try {
         abortRef.current.abort();
@@ -789,11 +815,9 @@ function apiUrl(path) {
     try {
       const scopeParams = buildScopeQuery();
 
-      // ✅ Determine Farrington availability from precheck (weeksCoverage)
       const weeksCoverage = typeof readiness?.weeksCoverage === "number" ? readiness.weeksCoverage : null;
       const farringtonAvailable = !(typeof weeksCoverage === "number" && weeksCoverage < 52);
 
-      // ✅ Filter methods: drop farrington if unavailable
       const m = m0.filter((x) => (x === "farrington" ? farringtonAvailable : true));
       if (!m.length) {
         setErrMsg(
@@ -804,14 +828,13 @@ function apiUrl(path) {
         return;
       }
 
-      // ---------- RUN ----------
       const runParams = new URLSearchParams(scopeParams);
       runParams.set("signal", derivedSignal);
       runParams.set("methods", m.join(","));
       runParams.set("testCode", String(testCode));
       runParams.set("lang", "both");
 
-      const runJ = await fetchJSON(`${apiUrl("/analytics/run")}?${runParams.toString()}`, controller.signal);
+      const runJ = await fetchJSONSafe(`${apiUrl("/analytics/run")}?${runParams.toString()}`, controller.signal);
 
       const runPayload = runJ?.data || null;
       setRunData(runPayload);
@@ -820,14 +843,12 @@ function apiUrl(path) {
       if (dr1) setDataRange(dr1);
 
       const results = runPayload?.results || {};
-
       setChartsPayload({
         ewma: results?.ewma ? { data: { ewma: results.ewma } } : null,
         cusum: results?.cusum ? { data: { cusum: results.cusum } } : null,
         farrington: results?.farrington ? { data: { farrington: results.farrington } } : null,
       });
 
-      // ---------- REPORT ----------
       const reportParams = new URLSearchParams(scopeParams);
       reportParams.set("signal", derivedSignal);
       reportParams.set("testCode", String(testCode));
@@ -835,8 +856,7 @@ function apiUrl(path) {
       reportParams.set("lang", lang);
       reportParams.set("_ts", String(Date.now()));
 
-      const repJ = await fetchJSON(`${apiUrl("/analytics/report")}?${reportParams.toString()}`, controller.signal);
-
+      const repJ = await fetchJSONSafe(`${apiUrl("/analytics/report")}?${reportParams.toString()}`, controller.signal);
 
       const extracted = extractReport(repJ?.data?.report, lang);
       const finalReport = (extracted?.trim() ? extracted : "").trim();
@@ -844,15 +864,11 @@ function apiUrl(path) {
 
       const repConsensus = repJ?.data?.meta?.consensus || repJ?.data?.meta?.meta?.consensus || null;
       if (repConsensus) {
-        setRunData((prev) => {
-          if (!prev) return prev;
-          return { ...prev, consensus: repConsensus };
-        });
+        setRunData((prev) => (prev ? { ...prev, consensus: repConsensus } : prev));
       }
 
       try {
-        const hj = await fetchJSON(apiUrl("/health"), controller.signal);
-
+        const hj = await fetchJSONSafe(apiUrl("/health"), controller.signal);
         setLastUpdated(hj?.time || hj?.timestamp || null);
       } catch {}
     } catch (e) {
@@ -898,7 +914,6 @@ function apiUrl(path) {
 
   const weekly = runData?.meta?.weekly || runData?.meta?.meta?.weekly || runData?.weekly || null;
   const trendKey = weekly ? computeTrendFromWeekly(weekly) : trendFromResults(runData?.results);
-
   const confidenceKey = computeConfidence(runData?.meta || runData?.meta?.meta || runData?.meta);
 
   const trendLabel =
@@ -909,7 +924,26 @@ function apiUrl(path) {
   const statusLabel = decision === "ALERT" ? t.alert : decision === "WATCH" ? t.watch : t.info;
   const trustMethods = methodsLabel(selectedMethods());
 
-  const dataset = lastUpload?.ok ? t.uploadOk : t.notAvailable;
+  // ✅ “مصدر البيانات” كقيمة واضحة (بدون تكرار كلمة Data/Dataset)
+  const datasetValue = useMemo(() => {
+    const src = lastUpload?.ok
+      ? (lang === "ar" ? "ملف CSV مرفوع" : "Uploaded CSV")
+      : (lang === "ar" ? "قاعدة بيانات النظام" : "System database");
+
+    if (scopeMode === "global") return `${src} • ${lang === "ar" ? "نطاق: الكل" : "Scope: global"}`;
+    if (scopeMode === "facility") return `${src} • ${lang === "ar" ? "مرفق" : "Facility"}: ${facilityId?.trim() || (lang === "ar" ? "غير محدد" : "unspecified")}`;
+    return `${src} • ${lang === "ar" ? "منطقة" : "Region"}: ${regionId?.trim() || (lang === "ar" ? "غير محدد" : "unspecified")}`;
+  }, [lastUpload?.ok, lang, scopeMode, facilityId, regionId]);
+
+  // ✅ الفترة الزمنية كقيمة واضحة (بدون تكرار كلمة Period/الفترة داخل النص)
+  const dateRangeValue = useMemo(() => {
+    if (dataRange?.start || dataRange?.end) {
+      const s = dataRange?.start || "—";
+      const e = dataRange?.end || "—";
+      return `${s} → ${e}`;
+    }
+    return lang === "ar" ? "كامل البيانات المتاحة" : "All available data";
+  }, [dataRange?.start, dataRange?.end, lang]);
 
   const ewCfg = adaptEWMA(chartsPayload?.ewma);
   const cuCfg = adaptCUSUM(chartsPayload?.cusum);
@@ -930,24 +964,22 @@ function apiUrl(path) {
   const overallRate = pickRate(profile?.overall);
   const overallCases = pickCases(profile?.overall);
 
-  // ✅ Farrington availability from precheck (before any analysis)
   const preWeeks = typeof readiness?.weeksCoverage === "number" ? readiness.weeksCoverage : null;
   const farringtonAvailablePre = readiness?.ok === true && typeof preWeeks === "number" ? preWeeks >= 52 : null;
   const fDisabledPre = hasChecked && (farringtonAvailablePre === false);
 
-  // ✅ Farrington (backend) data sufficiency message (after analysis, if any)
   const fSuff = runData?.results?.farrington?.dataSufficiency || null;
   const fDisabledAfterRun = !!(fSuff && fSuff.ok === false);
 
-  const whyText = (() => {
+  const whyText = useMemo(() => {
     const parts = [];
     parts.push(`${t.methodsUsed}: ${trustMethods}`);
     if (trendKey !== "no_data") parts.push(`${t.trend}: ${trendLabel}`);
     parts.push(`${t.confidence}: ${confLabel}`);
     return parts.join(" • ");
-  })();
+  }, [t, trustMethods, trendKey, trendLabel, confLabel]);
 
-  const actionsText = (() => {
+  const actionsText = useMemo(() => {
     if (uiDecision === "alert") {
       return lang === "ar"
         ? "يوصى بمراجعة الوضع فورًا: تأكيد جودة البيانات، ثم فحص التقسيم السكاني والمرفق/المنطقة الأكثر مساهمة."
@@ -958,10 +990,8 @@ function apiUrl(path) {
         ? "إشارة تستدعي المراقبة: يوجد تنبيه من طريقة واحدة أو أكثر. يُنصح بالمتابعة القريبة خلال الأسابيع القادمة ومقارنة النطاق عند توفر بيانات أكثر."
         : "Monitoring signal: one or more methods triggered an alert. Follow closely over the coming weeks and compare scope as more data arrive.";
     }
-    return lang === "ar"
-      ? "لا يوجد إجراء عاجل. الاستمرار في الرصد ورفع العينة لتحسين الثقة."
-      : "No urgent action. Continue monitoring and grow sample size to improve confidence.";
-  })();
+    return lang === "ar" ? "لا يوجد إجراء عاجل. الاستمرار في الرصد ورفع العينة لتحسين الثقة." : "No urgent action. Continue monitoring and grow sample size to improve confidence.";
+  }, [uiDecision, lang]);
 
   return (
     <div className="dash" dir={isRTL ? "rtl" : "ltr"}>
@@ -996,11 +1026,18 @@ function apiUrl(path) {
               const dr = payload?.dateRange;
               if (dr?.start || dr?.end) setDataRange(dr);
 
-              // ✅ بعد رفع جديد: نعيد حالة الفحص (مهم)
               setHasChecked(false);
-              setReadiness({ loading: false, ok: null, reason: null, overallN: null, weeksCoverage: null });
+              setReadiness({
+                loading: false,
+                ok: null,
+                reason: null,
+                overallN: null,
+                weeksCoverage: null,
+                dateRange: null,
+                perMethod: null,
+              });
 
-              fetchJSON(apiUrl("/health"))
+              fetchJSONSafe(apiUrl("/health"))
                 .then((hj) => setLastUpdated(hj?.time || hj?.timestamp || null))
                 .catch(() => {});
             }}
@@ -1127,18 +1164,32 @@ function apiUrl(path) {
           </div>
         </div>
 
-        <div className="methodRow" style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 6 }}>
+        {/* ✅ Methods chips */}
+        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 6 }}>
           <div className="field" style={{ flex: 1 }}>
             <label>{t.methods}</label>
+
             <div className="chips" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button type="button" className={`chipBtn ${methods.ewma ? "chipBtnOn" : ""}`} onClick={() => toggleMethod("ewma")}>
+              <button
+                type="button"
+                className={`chipBtn ${methods.ewma ? "chipBtnOn" : ""} ${!hasChecked ? "chipBtnOff" : ""}`}
+                onClick={() => toggleMethod("ewma")}
+                disabled={!hasChecked}
+                title={!hasChecked ? (lang === "ar" ? "افحص البيانات أولًا" : "Check data first") : ""}
+              >
                 EWMA
               </button>
-              <button type="button" className={`chipBtn ${methods.cusum ? "chipBtnOn" : ""}`} onClick={() => toggleMethod("cusum")}>
+
+              <button
+                type="button"
+                className={`chipBtn ${methods.cusum ? "chipBtnOn" : ""} ${!hasChecked ? "chipBtnOff" : ""}`}
+                onClick={() => toggleMethod("cusum")}
+                disabled={!hasChecked}
+                title={!hasChecked ? (lang === "ar" ? "افحص البيانات أولًا" : "Check data first") : ""}
+              >
                 CUSUM
               </button>
 
-              {/* ✅ Farrington chip becomes non-clickable if precheck says unavailable */}
               <button
                 type="button"
                 className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""} ${fDisabledPre ? "chipBtnOff" : ""}`}
@@ -1161,13 +1212,8 @@ function apiUrl(path) {
           </div>
 
           <div className="actions">
-            <button type="button" className="dangerBtn" onClick={() => setPreset("high")} disabled={loading}>
-              {t.quickHigh}
-            </button>
-
-            {/* ✅ NEW: Precheck button */}
             <button type="button" className="ghostBtn" onClick={loadReadiness} disabled={loading || readiness?.loading}>
-              {readiness?.loading ? (lang === "ar" ? "جاري الفحص…" : "Checking…") : (lang === "ar" ? "فحص البيانات" : "Check data")}
+              {readiness?.loading ? (lang === "ar" ? "جاري الفحص…" : "Checking…") : lang === "ar" ? "فحص البيانات" : "Check data"}
             </button>
 
             <button type="button" className="primaryBtn" onClick={runAnalysis} disabled={!canRunNow}>
@@ -1234,12 +1280,19 @@ function apiUrl(path) {
           </div>
         ) : null}
 
+        {/* ✅ FIXED miniGrid: كل miniRow سطر واحد (مفتاح+قيمة) */}
         <div className="miniGrid">
           <div className="mini">
             <div className="miniRow">
               <div className="miniKey">{t.dataset}</div>
-              <div className="miniVal">{dataset}</div>
+              <div className="miniVal">{datasetValue}</div>
             </div>
+
+            <div className="miniRow">
+              <div className="miniKey">{lang === "ar" ? "الفترة الزمنية" : "Time range"}</div>
+              <div className="miniVal">{dateRangeValue}</div>
+            </div>
+
             <div className="miniRow">
               <div className="miniKey">{t.scope}</div>
               <div className="miniVal">{scopeLabel()}</div>
@@ -1253,7 +1306,8 @@ function apiUrl(path) {
             </div>
             <div className="miniRow">
               <div className="miniKey">{t.lastUpdated}</div>
-              <div className="miniVal">{lastUpdated ? String(lastUpdated) : t.notAvailable}</div>
+              <div className="miniVal">{lastUpdated ? formatDate(lastUpdated, lang) : t.notAvailable}
+</div>
             </div>
           </div>
         </div>
@@ -1338,7 +1392,6 @@ function apiUrl(path) {
                     <b>{t.actions}</b> — {actionsText}
                   </div>
 
-                  {/* ✅ Info from precheck (before run) */}
                   {fDisabledPre ? (
                     <div style={{ marginTop: 2, opacity: 0.92 }}>
                       <b>{lang === "ar" ? "معلومة:" : "Info:"}</b>{" "}
@@ -1348,7 +1401,6 @@ function apiUrl(path) {
                     </div>
                   ) : null}
 
-                  {/* ✅ Info from backend (after run), if method returned disabled */}
                   {fDisabledAfterRun ? (
                     <div style={{ marginTop: 2, opacity: 0.92 }}>
                       <b>{lang === "ar" ? "معلومة:" : "Info:"}</b>{" "}
@@ -1425,7 +1477,11 @@ function apiUrl(path) {
                     </div>
 
                     {insightText ? (
-                      <div className="reportBox2" style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }} dir={isRTL ? "rtl" : "ltr"}>
+                      <div
+                        className="reportBox2"
+                        style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }}
+                        dir={isRTL ? "rtl" : "ltr"}
+                      >
                         {insightText}
                       </div>
                     ) : null}
