@@ -47,10 +47,13 @@ function resolveClinicalConfig(testCode) {
 function weekKeyToStartDate(weekKey) {
   const m = String(weekKey || "").match(/^(\d{4})-W(\d{2})$/);
   if (!m) return null;
+
   const y = Number(m[1]);
   const w = Number(m[2]);
   if (!Number.isFinite(y) || !Number.isFinite(w)) return null;
-  return dayjs().isoWeekYear(y).isoWeek(w).startOf("isoWeek"); // Monday
+
+  // ✅ dayjs-safe: لا تستخدم isoWeekYear chaining
+  return dayjs(`${y}-01-01`).isoWeek(w).startOf("isoWeek");
 }
 
 function getWeekKey(d) {
