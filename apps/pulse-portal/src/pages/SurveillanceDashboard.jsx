@@ -526,7 +526,22 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const t = useMemo(() => TXT[lang] || TXT.en, [lang]);
   const isRTL = lang === "ar";
 
-  const apiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://localhost:4000";
+  const rawBase =
+  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_API_URL ||
+  "http://localhost:8080"; // خليه 8080 لأنه بملف server.js عندك
+
+// ✅ توحيد: apiBase بدون سلاش في النهاية
+const apiBase = String(rawBase).replace(/\/+$/, "");
+
+// ✅ helper: يضمن وجود /api دائماً (ويمنع تكراره)
+function apiUrl(path) {
+  const p = String(path || "");
+  if (p.startsWith("/api/")) return `${apiBase}${p}`;
+  if (p.startsWith("/")) return `${apiBase}/api${p}`;
+  return `${apiBase}/api/${p}`;
+}
+
 
   // ✅ Scope
   const [scopeMode, setScopeMode] = useState("global");
@@ -597,7 +612,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     let cancelled = false;
     async function loadHealth() {
       try {
-        const j = await fetchJSON(`${apiBase}/health`);
+        const j = await fetchJSON(apiUrl("/health"));
+
         if (!cancelled) setLastUpdated(j?.time || j?.timestamp || null);
       } catch {}
     }
@@ -795,7 +811,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       runParams.set("testCode", String(testCode));
       runParams.set("lang", "both");
 
-      const runJ = await fetchJSON(`${apiBase}/api/analytics/run?${runParams.toString()}`, controller.signal);
+      const runJ = await fetchJSON(`${apiUrl("/analytics/run")}?${runParams.toString()}`, controller.signal);
+
       const runPayload = runJ?.data || null;
       setRunData(runPayload);
 
@@ -818,7 +835,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       reportParams.set("lang", lang);
       reportParams.set("_ts", String(Date.now()));
 
-      const repJ = await fetchJSON(`${apiBase}/api/analytics/report?${reportParams.toString()}`, controller.signal);
+      const repJ = await fetchJSON(`${apiUrl("/analytics/report")}?${reportParams.toString()}`, controller.signal);
+
 
       const extracted = extractReport(repJ?.data?.report, lang);
       const finalReport = (extracted?.trim() ? extracted : "").trim();
@@ -833,7 +851,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       }
 
       try {
-        const hj = await fetchJSON(`${apiBase}/health`, controller.signal);
+        const hj = await fetchJSON(apiUrl("/health"), controller.signal);
+
         setLastUpdated(hj?.time || hj?.timestamp || null);
       } catch {}
     } catch (e) {
@@ -981,7 +1000,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               setHasChecked(false);
               setReadiness({ loading: false, ok: null, reason: null, overallN: null, weeksCoverage: null });
 
-              fetchJSON(`${apiBase}/health`)
+              fetchJSON(apiUrl("/health"))
                 .then((hj) => setLastUpdated(hj?.time || hj?.timestamp || null))
                 .catch(() => {});
             }}
