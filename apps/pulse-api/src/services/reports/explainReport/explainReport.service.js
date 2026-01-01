@@ -1,5 +1,29 @@
-function isoNow() {
-  return new Date().toISOString();
+/* =========================
+   Date & helpers
+   ========================= */
+
+function formatNow(lang = "en") {
+  const d = new Date();
+
+  if (String(lang).toLowerCase() === "ar") {
+    return d.toLocaleString("ar-JO", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+  }
+
+  return d.toLocaleString("en-GB", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 function up(x) {
@@ -34,6 +58,10 @@ function decisionWord(decision, lang) {
     return "Info";
   }
 }
+
+/* =========================
+   Narrative blocks
+   ========================= */
 
 function buildPlainSummary({ lang, consensus }) {
   const isAr = String(lang || "en").toLowerCase() === "ar";
@@ -70,7 +98,7 @@ function buildHowDetected({ lang, methodsUsed }) {
     } else if (k === "cusum") {
       lines.push(isAr ? "- CUSUM: يرصد الانحرافات الصغيرة التي تتراكم مع الوقت." : "- CUSUM: Detects small persistent changes that accumulate.");
     } else if (k === "farrington") {
-      lines.push(isAr ? "- Farrington: يقارن الأسبوع الحالي بخط أساس تاريخي لرصد زيادات/انحرافات غير معتادة." : "- Farrington: Compares current week vs historical baseline to flag unusual deviations.");
+      lines.push(isAr ? "- Farrington: يقارن الأسبوع الحالي بخط أساس تاريخي لرصد زيادات غير معتادة." : "- Farrington: Compares current week vs historical baseline to flag unusual deviations.");
     }
   }
 
@@ -81,41 +109,37 @@ function buildConfidence({ lang, dataQuality, consensus }) {
   const isAr = String(lang || "en").toLowerCase() === "ar";
   const weeks = dataQuality?.weeksCoverage ?? null;
   const n = dataQuality?.overallN ?? null;
-
   const d = String(consensus?.decision || "info").toLowerCase();
 
-  // simple explainable text (no fake ML)
   if (isAr) {
     const parts = [];
     parts.push("الثبات والموثوقية");
-    parts.push(
-      "ترتفع الثقة عندما يكون الانحراف ممتدًا عبر عدة أسابيع، ويظهر عبر أكثر من طريقة، ومع حجم عينات أسبوعي مناسب."
-    );
+    parts.push("ترتفع الثقة عندما يستمر الانحراف عبر عدة أسابيع ويظهر عبر أكثر من طريقة.");
     if (typeof n === "number" && typeof weeks === "number") {
-      parts.push(`(حجم البيانات: ${n} فحص، تغطية: ${weeks} أسبوع)`);
+      parts.push(`(حجم البيانات: ${n} فحص، التغطية: ${weeks} أسبوع)`);
     }
     if (d === "alert" && (weeks || 0) < 4) {
-      parts.push("ملاحظة: التغطية الزمنية قصيرة؛ يُنصح باعتبار النتيجة للمراقبة حتى تتوفر أسابيع إضافية.");
+      parts.push("ملاحظة: التغطية الزمنية قصيرة؛ يوصى بالمراقبة.");
     }
     return parts.join("\n");
   }
 
   const parts = [];
   parts.push("Stability & confidence");
-  parts.push("Confidence increases when deviation persists across multiple weeks, is supported by more than one method, and weekly volume is sufficient.");
+  parts.push("Confidence increases when deviation persists across weeks and multiple methods.");
   if (typeof n === "number" && typeof weeks === "number") {
     parts.push(`(Data volume: ${n} tests, coverage: ${weeks} weeks)`);
   }
   if (d === "alert" && (weeks || 0) < 4) {
-    parts.push("Note: short time coverage; consider treating as monitoring until more weeks are available.");
+    parts.push("Note: short time coverage; consider monitoring.");
   }
   return parts.join("\n");
 }
 
-/**
- * generateExplanationReport
- * Deterministic, professional template report (NOT an ML model).
- */
+/* =========================
+   Main generator
+   ========================= */
+
 function generateExplanationReport({
   lang = "en",
   signalType,
@@ -142,93 +166,35 @@ function generateExplanationReport({
   const infoBlock = isAr
     ? [
         "معلومات التقرير",
-        `تاريخ الإنشاء: ${isoNow()}`,
+        `تاريخ الإنشاء: ${formatNow(lang)}`,
         `الجهة/المركز: ${facilityId || "—"}`,
-        `النطاق الزمني: ${new Date().toLocaleString("ar-JO")}`
+        `النطاق الزمني: ${timeRange || "كامل البيانات المتاحة"}`,
         `مستوى التجميع: ${aggregation === "Weekly" ? "أسبوعي" : aggregation}`,
         `الفحص: ${testCode || "—"} • الإشارة: ${signalType || "—"}`,
         `الطرق المستخدمة: ${methodsLine}`,
       ].join("\n")
     : [
         "Report info",
-        `Generated: ${isoNow()}`,
+        `Generated: ${formatNow(lang)}`,
         `Facility: ${facilityId || "—"}`,
-        `Time range: ${timeRange ? timeRange : "All available data"}`,
+        `Time range: ${timeRange || "All available data"}`,
         `Aggregation: ${aggregation}`,
         `Test: ${testCode || "—"} • Signal: ${signalType || "—"}`,
         `Methods: ${methodsLine}`,
       ].join("\n");
-
-  const summary = isAr
-    ? ["ملخص مبسّط (لغير المتخصص)", buildPlainSummary({ lang, consensus })].join("\n")
-    : ["Plain-language summary", buildPlainSummary({ lang, consensus })].join("\n");
-
-  const whatDataShows = isAr
-    ? [
-        "ماذا نرى في البيانات؟",
-        "الملخص هنا يعتمد على قرار التوافق (Consensus) عبر الطرق المختارة، وليس على طريقة واحدة فقط.",
-        "للتفاصيل الدقيقة راجع الرسوم البيانية والتقسيم السكاني في لوحة التحكم.",
-      ].join("\n")
-    : [
-        "What the data shows",
-        "This summary follows the consensus across selected methods (not a single-method flag).",
-        "For details, review charts and stratification in the dashboard.",
-      ].join("\n");
-
-  const howDetected = isAr
-    ? ["كيف تم رصد ذلك؟", buildHowDetected({ lang, methodsUsed })].join("\n")
-    : ["How this was detected", buildHowDetected({ lang, methodsUsed })].join("\n");
-
-  const confidence = buildConfidence({ lang, dataQuality, consensus });
-
-  const dataNotes = isAr
-    ? [
-        "ملاحظات وحدود البيانات",
-        "- هذا التقرير لا يشخص أفرادًا ولا يقدم توصيات علاجية.",
-        "- يُفسَّر ضمن السياق الصحي والميداني ومعرفة المختصين.",
-      ].join("\n")
-    : [
-        "Data notes & limitations",
-        "- This report does not diagnose individuals or provide treatment guidance.",
-        "- Interpret within clinical/public-health context with expert oversight.",
-      ].join("\n");
-
-  const usage = isAr
-    ? [
-        "حدود الاستخدام",
-        "هذا التقرير يقدم مؤشرات تحليلية على مستوى السكان فقط. يلزم تفسيره من قبل مختصين ضمن السياق.",
-      ].join("\n")
-    : [
-        "Usage boundaries",
-        "Population-level indicators only. Expert contextual interpretation is required.",
-      ].join("\n");
-
-  // optional: mention which method objects are present (helps debugging)
-  const present = [];
-  if (ewma) present.push("EWMA");
-  if (cusum) present.push("CUSUM");
-  if (farrington) present.push("Farrington");
-  const debugLine = isAr
-    ? `\n(تم تضمين النتائج: ${present.length ? present.join(", ") : "—"})`
-    : `\n(Results included: ${present.length ? present.join(", ") : "—"})`;
 
   const reportText = [
     title,
     "",
     infoBlock,
     "",
-    summary,
+    isAr ? "ملخص مبسّط" : "Plain-language summary",
+    buildPlainSummary({ lang, consensus }),
     "",
-    whatDataShows,
+    isAr ? "كيف تم الرصد؟" : "How detected",
+    buildHowDetected({ lang, methodsUsed }),
     "",
-    howDetected,
-    "",
-    confidence,
-    "",
-    dataNotes,
-    "",
-    usage,
-    debugLine,
+    buildConfidence({ lang, dataQuality, consensus }),
   ].join("\n");
 
   return { reportText };
