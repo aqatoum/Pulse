@@ -20,10 +20,7 @@ function normCode(x) {
 function normalizeTimeRange({ startDate, endDate } = {}) {
   const from = startDate ? dayjs(startDate) : null;
   const to = endDate ? dayjs(endDate) : null;
-  return {
-    from: from && from.isValid() ? from : null,
-    to: to && to.isValid() ? to : null,
-  };
+  return { from, to };
 }
 
 function resolveClinicalConfig(testCode) {
@@ -47,13 +44,6 @@ function resolveClinicalConfig(testCode) {
   return { tc, cfg: null };
 }
 
-function getWeekKey(d) {
-  const x = dayjs(d);
-  const y = x.isoWeekYear();
-  const w = String(x.isoWeek()).padStart(2, "0");
-  return `${y}-W${w}`;
-}
-
 function weekKeyToStartDate(weekKey) {
   const m = String(weekKey || "").match(/^(\d{4})-W(\d{2})$/);
   if (!m) return null;
@@ -61,6 +51,13 @@ function weekKeyToStartDate(weekKey) {
   const w = Number(m[2]);
   if (!Number.isFinite(y) || !Number.isFinite(w)) return null;
   return dayjs().isoWeekYear(y).isoWeek(w).startOf("isoWeek"); // Monday
+}
+
+function getWeekKey(d) {
+  const x = dayjs(d);
+  const y = x.isoWeekYear();
+  const w = String(x.isoWeek()).padStart(2, "0");
+  return `${y}-W${w}`;
 }
 
 function fillMissingWeeksFromKeys(keysSorted) {
@@ -82,11 +79,11 @@ function fillMissingWeeksFromKeys(keysSorted) {
 
 /**
  * GET /api/analytics/precheck
- * Parameters:
- * - facilityId / regionId (optional)
- * - startDate / endDate (optional)
- * - testCode (optional, default HB)
- * - minWeeksCoverage (optional, default 52)
+ * Returns:
+ * - overallN
+ * - weeksCoverage
+ * - hasThresholds
+ * - perMethod readiness
  */
 router.get("/precheck", async (req, res) => {
   try {
@@ -100,58 +97,37 @@ router.get("/precheck", async (req, res) => {
     } = req.query;
 
     const { from, to } = normalizeTimeRange({ startDate, endDate });
-    const tcReq = normCode(testCode);
+    const tc = normCode(testCode);
 
-    const { tc: baseTc, cfg: clinicalCfg } = resolveClinicalConfig(tcReq);
+    const { tc: baseTc, cfg: clinicalCfg } = resolveClinicalConfig(tc);
     const hasThresholds = !!clinicalCfg;
 
-    // ===== match =====
     const match = {};
-
     if (facilityId) match.facilityId = String(facilityId).trim();
     if (regionId) match.regionId = String(regionId).trim();
 
-    // date: prefer testDate then collectedAt
-    const dateExpr = { $ifNull: ["$testDate", "$collectedAt"] };
-
-    // require at least one date exists
+    // require date exists
     match.$or = [{ testDate: { $ne: null } }, { collectedAt: { $ne: null } }];
 
-    // IMPORTANT:
-    // - لا تقصّي السجلات إذا testCode مفقود (مثل سلوك run عندك)
-    // - اقبل tcReq أو baseTc أو null/empty
-    match.$and = match.$and || [];
-    match.$and.push({
-      $or: [
-        { testCode: { $in: [tcReq, baseTc] } },
-        { testCode: { $exists: false } },
-        { testCode: null },
-        { testCode: "" },
-      ],
-    });
+    // match testCode (allow alias)
+    match.testCode = { $in: [tc, baseTc] };
 
-    // date range filter via $expr
+    // range via $expr on chosen date
+    const dateExpr = { $ifNull: ["$testDate", "$collectedAt"] };
     const exprAnd = [];
     if (from) exprAnd.push({ $gte: [dateExpr, from.toDate()] });
     if (to) exprAnd.push({ $lte: [dateExpr, to.toDate()] });
     if (exprAnd.length) match.$expr = { $and: exprAnd };
 
-    // ===== pipeline =====
-    // بدل $isoWeek / $isoWeekYear (قد لا تكون مدعومة عند بعض النسخ)
-    // نستخدم $dateToParts مع iso8601: true (أكثر توافقًا)
     const pipeline = [
       { $match: match },
       { $project: { dt: dateExpr } },
-
-      // toParts gives isoWeekYear/isoWeek when iso8601=true
-      {
-        $project: {
-          parts: { $dateToParts: { date: "$dt", iso8601: true } },
-        },
-      },
       {
         $group: {
-          _id: { isoYear: "$parts.isoWeekYear", isoWeek: "$parts.isoWeek" },
+          _id: {
+            isoYear: { $isoWeekYear: "$dt" },
+            isoWeek: { $isoWeek: "$dt" },
+          },
           n: { $sum: 1 },
         },
       },
@@ -199,9 +175,7 @@ router.get("/precheck", async (req, res) => {
       perMethod.farrington = { ok: false, reason: "NO_THRESHOLDS" };
     } else {
       const minW = Number(minWeeksCoverage);
-      if (!Number.isFinite(minW) || minW <= 0) {
-        perMethod.farrington = { ok: true, weeksCoverage };
-      } else if (weeksCoverage < minW) {
+      if (weeksCoverage < minW) {
         perMethod.farrington = {
           ok: false,
           reason: "INSUFFICIENT_WEEKS_COVERAGE",
@@ -213,15 +187,20 @@ router.get("/precheck", async (req, res) => {
       }
     }
 
-    return apiOk(res, {
+    const data = {
       testCode: baseTc,
       overallN,
       weeksCoverage,
       hasThresholds,
       perMethod,
-    });
+    };
+
+    // ✅ IMPORTANT: make response shape consistent with the rest of your API
+    return res.json(apiOk({ data }));
   } catch (e) {
-    return apiError(res, e?.message || String(e));
+    return res
+      .status(500)
+      .json(apiError({ status: 500, error: e?.message || String(e) }));
   }
 });
 

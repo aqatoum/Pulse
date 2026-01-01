@@ -13,6 +13,8 @@ const { scanRowsQuality } = require("../services/quality/dataQualityScan.service
 
 const { apiOk, apiError } = require("../utils/response");
 const ANALYTICS_DEFAULTS = require("../config/analytics.defaults");
+const precheckRoutes = require("./analytics.precheck.routes");
+
 
 // ✅ ML-assisted explanation report generator (template-based, does NOT replace stats)
 let generateExplanationReport = null;
@@ -1066,5 +1068,6 @@ router.get("/anemia-report", (req, res, next) => {
   req.url = req.url.replace(/^\/anemia-report/, "/report");
   return router.handle(req, res, next);
 });
+router.use("/", precheckRoutes);
 
 module.exports = router;
