@@ -1,18 +1,21 @@
+// apps/pulse-api/src/routes/index.js
 const express = require("express");
 const router = express.Router();
 
-// NEW filenames
+// Existing routes
 const ingestRoutes = require("./ingest.routes");
 const analyticsRoutes = require("./analytics.routes");
+
+// ✅ NEW: precheck route (make sure this file exists)
 const analyticsPrecheckRoutes = require("./analytics.precheck.routes");
 
 // Mount
 router.use("/ingest", ingestRoutes);
+
+// ✅ Analytics main endpoints (run/report/summary...etc)
 router.use("/analytics", analyticsRoutes);
 
-// ✅ Add precheck under the same analytics namespace
-// This enables: GET /api/analytics/precheck  (assuming server mounts this router under /api)
+// ✅ Analytics precheck endpoint: /api/analytics/precheck
 router.use("/analytics", analyticsPrecheckRoutes);
 
 module.exports = router;
-

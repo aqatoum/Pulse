@@ -286,6 +286,10 @@ const styles = `
     background: rgba(255,255,255,0.14);
     border-color: rgba(255,255,255,0.24);
   }
+  .chipBtnOff{
+    opacity: .55;
+    cursor:not-allowed;
+  }
 `;
 
 /* =========================
@@ -468,6 +472,54 @@ function StratCard({ title, items, getKey, t }) {
 }
 
 /* =========================
+   ✅ Precheck helpers
+   ========================= */
+function normalizePrecheck(resp) {
+  // يقبل عدة أشكال دون كسر
+  // المتوقع:
+  // { ok:true, overallN, weeksCoverage, dateRange:{start,end}, perMethod:{farrington:{ok,reason}} }
+  const d = resp?.data ?? resp ?? {};
+  const meta = d?.meta ?? d?.readiness ?? d ?? {};
+
+  const overallN =
+    typeof meta?.overallN === "number"
+      ? meta.overallN
+      : typeof meta?.n === "number"
+      ? meta.n
+      : typeof meta?.profile?.overall?.n === "number"
+      ? meta.profile.overall.n
+      : null;
+
+  const weeksCoverage =
+    typeof meta?.weeksCoverage === "number"
+      ? meta.weeksCoverage
+      : typeof meta?.weeks === "number"
+      ? meta.weeks
+      : typeof meta?.dataQuality?.weeksCoverage === "number"
+      ? meta.dataQuality.weeksCoverage
+      : null;
+
+  const dateRange =
+    meta?.dateRange && (meta.dateRange.start || meta.dateRange.end)
+      ? meta.dateRange
+      : meta?.range && (meta.range.start || meta.range.end)
+      ? meta.range
+      : null;
+
+  const perMethod = meta?.perMethod || meta?.methods || null;
+
+  return {
+    ok: meta?.ok ?? true,
+    overallN,
+    weeksCoverage,
+    dateRange,
+    perMethod,
+    reason: meta?.reason || null,
+    raw: meta,
+  };
+}
+
+/* =========================
    ✅ Page
    ========================= */
 export default function SurveillanceDashboard({ lang = "en" }) {
@@ -484,7 +536,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   // ✅ Test selection
   const [testCode, setTestCode] = useState("HB");
   const derivedSignal = useMemo(() => getSignalForTest(testCode), [testCode]);
-  const derivedSignalLabel = useMemo(() => getSignalLabel(t, derivedSignal), [t, derivedSignal]);
+  const derivedSignalLabel = useMemo(() => getSignalForTest(testCode), [testCode]); // kept (compat)
+  const derivedSignalLabelText = useMemo(() => getSignalLabel(t, derivedSignal), [t, derivedSignal]);
 
   // ✅ Methods
   const [methods, setMethods] = useState({ ewma: true, cusum: true, farrington: true });
@@ -494,6 +547,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const [endDate, setEndDate] = useState("");
   const [preset, setPreset] = useState("standard");
 
+  // Advanced preset params
   const [ewmaLambda, setEwmaLambda] = useState(PRESETS.standard.ewma.lambda);
   const [ewmaL, setEwmaL] = useState(PRESETS.standard.ewma.L);
   const [ewmaBaselineN, setEwmaBaselineN] = useState(PRESETS.standard.ewma.baselineN);
@@ -534,15 +588,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
   const abortRef = useRef(null);
 
-  // ✅ NEW: readiness (precheck)
-  const [readiness, setReadiness] = useState({
-    loading: false,
-    ok: true,
-    overallN: null,
-    weeksCoverage: null,
-    perMethod: null,
-    error: null,
-  });
+  // ✅ Precheck state (NEW)
+  const [hasChecked, setHasChecked] = useState(false);
+  const [readiness, setReadiness] = useState({ loading: false, ok: null, reason: null, overallN: null, weeksCoverage: null });
 
   // Health ping
   useEffect(() => {
@@ -591,7 +639,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     if (preset) params.set("preset", preset);
     if (testCode) params.set("testCode", String(testCode));
 
-    // advanced mode ON (بدون UI)
     params.set("advanced", "1");
 
     params.set("ewmaLambda", String(clampNum(ewmaLambda, BOUNDS.ewma.lambda.min, BOUNDS.ewma.lambda.max)));
@@ -619,66 +666,77 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       : `${t.modeRegion}: ${regionId?.trim() || t.notAvailable}`;
   }
 
-  // ✅ NEW: precheck fetcher
-  async function fetchPrecheck(signal) {
-    const params = buildScopeQuery();
-    params.set("testCode", String(testCode));
+  // ✅ Manual Precheck (NEW) — user must click
+  async function loadReadiness() {
+    // abort previous request
+    if (abortRef.current) {
+      try {
+        abortRef.current.abort();
+      } catch {}
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-    setReadiness((r) => ({ ...r, loading: true, error: null }));
+    setReadiness((p) => ({ ...p, loading: true }));
+    setErrMsg("");
 
     try {
-      const j = await fetchJSON(`${apiBase}/api/analytics/precheck?${params.toString()}`, signal);
-      const d = j?.data || null;
+      const scopeParams = buildScopeQuery();
+      const p = new URLSearchParams(scopeParams);
+      p.set("signal", derivedSignal);
+      p.set("testCode", String(testCode));
+      p.set("lang", "both");
+      p.set("_ts", String(Date.now()));
+
+      // Endpoint المقترح: /api/analytics/precheck
+      // إن لم يكن موجودًا، لن يكسر الواجهة (يظهر سبب PRECHECK_UNAVAILABLE)
+      const j = await fetchJSON(`${apiBase}/api/analytics/precheck?${p.toString()}`, controller.signal);
+      const r = normalizePrecheck(j);
+
+      const weeksCoverage = typeof r.weeksCoverage === "number" ? r.weeksCoverage : null;
+      const overallN = typeof r.overallN === "number" ? r.overallN : null;
 
       setReadiness({
         loading: false,
         ok: true,
-        overallN: typeof d?.overallN === "number" ? d.overallN : null,
-        weeksCoverage: typeof d?.weeksCoverage === "number" ? d.weeksCoverage : null,
-        perMethod: d?.perMethod || null,
-        error: null,
+        reason: r.reason || null,
+        overallN,
+        weeksCoverage,
+        dateRange: r.dateRange || null,
+        perMethod: r.perMethod || null,
       });
 
-      // UX: إذا Farrington غير جاهز نطفئه تلقائيًا حتى لا يوهم المستخدم
-      const fOk = d?.perMethod?.farrington?.ok;
-      if (fOk === false) {
+      setHasChecked(true);
+
+      // ✅ تعطيل Farrington فورًا إذا أقل من 52 أسبوع
+      if (typeof weeksCoverage === "number" && weeksCoverage < 52) {
         setMethods((prev) => ({ ...prev, farrington: false }));
       }
+
+      // Update date range UI if returned
+      if (r.dateRange?.start || r.dateRange?.end) setDataRange(r.dateRange);
     } catch (e) {
-      // لا نكسر الصفحة إذا فشل precheck لأي سبب
-      setReadiness((r) => ({
-        ...r,
+      setReadiness({
         loading: false,
         ok: false,
-        error: String(e?.message || e),
-      }));
+        reason: "PRECHECK_UNAVAILABLE",
+        overallN: null,
+        weeksCoverage: null,
+        dateRange: null,
+        perMethod: null,
+      });
+      setHasChecked(true);
     }
   }
 
-  // ✅ NEW: run precheck on inputs change (debounced)
-  useEffect(() => {
-    const controller = new AbortController();
-    const id = setTimeout(() => {
-      fetchPrecheck(controller.signal);
-    }, 350);
-
-    return () => {
-      try {
-        controller.abort();
-      } catch {}
-      clearTimeout(id);
-    };
-  }, [scopeMode, facilityId, regionId, testCode, startDate, endDate, preset]); // preset ليس ضروريًا لكنه آمن
-
   /**
    * ✅ RUN:
-   * - يطلب /run ثم /report
-   * - يمنع التشغيل إذا لا توجد بيانات
-   * - ويشغّل فقط الطرق الجاهزة (خصوصًا Farrington)
+   * - لا يعمل قبل precheck
+   * - يستبعد Farrington تلقائيًا إذا غير متاح
    */
   async function runAnalysis() {
-    let m = selectedMethods();
-    if (!m.length) return;
+    const m0 = selectedMethods();
+    if (!m0.length) return;
 
     if (scopeMode === "facility" && !facilityId.trim()) {
       setErrMsg(t.requiredFacility);
@@ -689,26 +747,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
       return;
     }
 
-    // ✅ منع التشغيل إذا precheck يقول NO DATA
-    if (readiness?.overallN === 0) {
-      setErrMsg(
-        lang === "ar"
-          ? "لا توجد بيانات للفلاتر الحالية. جرّب توسيع الفترة أو رفع ملف بيانات."
-          : "No data for the current filters. Try expanding the date range or uploading data."
-      );
-      return;
-    }
-
-    // ✅ فلترة الطرق غير الجاهزة (حتى لو المستخدم فعّلها)
-    const pm = readiness?.perMethod || {};
-    m = m.filter((k) => pm?.[k]?.ok !== false);
-
-    if (!m.length) {
-      setErrMsg(
-        lang === "ar"
-          ? "لا توجد طرق جاهزة للتشغيل بناءً على جاهزية البيانات الحالية."
-          : "No methods are ready to run for the current data readiness."
-      );
+    // ✅ must precheck first
+    if (!hasChecked) {
+      setErrMsg(lang === "ar" ? "اضغط «فحص البيانات» أولًا." : "Please click “Check data” first.");
       return;
     }
 
@@ -731,6 +772,21 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
     try {
       const scopeParams = buildScopeQuery();
+
+      // ✅ Determine Farrington availability from precheck (weeksCoverage)
+      const weeksCoverage = typeof readiness?.weeksCoverage === "number" ? readiness.weeksCoverage : null;
+      const farringtonAvailable = !(typeof weeksCoverage === "number" && weeksCoverage < 52);
+
+      // ✅ Filter methods: drop farrington if unavailable
+      const m = m0.filter((x) => (x === "farrington" ? farringtonAvailable : true));
+      if (!m.length) {
+        setErrMsg(
+          lang === "ar"
+            ? "لا توجد تحليلات متاحة للتشغيل بناءً على فحص البيانات."
+            : "No analyses are available to run based on the data precheck."
+        );
+        return;
+      }
 
       // ---------- RUN ----------
       const runParams = new URLSearchParams(scopeParams);
@@ -776,7 +832,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         });
       }
 
-      // refresh health time
       try {
         const hj = await fetchJSON(`${apiBase}/health`, controller.signal);
         setLastUpdated(hj?.time || hj?.timestamp || null);
@@ -842,10 +897,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const faCfg = adaptFarrington(chartsPayload?.farrington);
 
   const presetLabel = preset === "low" ? t.presetLow : preset === "high" ? t.presetHigh : t.presetStandard;
-
-  // ✅ NEW: Run disabled when no data / precheck loading
-  const noData = readiness?.overallN === 0;
-  const canRunNow = !loading && !readiness.loading && !noData;
+  const canRunNow = !loading && !(readiness?.loading === true) && hasChecked;
 
   const profile = runData?.profile || null;
   const profileInsight = runData?.profileInsight || null;
@@ -859,11 +911,14 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const overallRate = pickRate(profile?.overall);
   const overallCases = pickCases(profile?.overall);
 
-  // ✅ NEW: Farrington readiness from precheck first, then fallback
-  const fReady = readiness?.perMethod?.farrington?.ok ?? (runData?.results?.farrington?.dataSufficiency?.ok ?? true);
-  const fDisabled = fReady === false;
-  const fReason =
-    readiness?.perMethod?.farrington?.reason || runData?.results?.farrington?.dataSufficiency?.reason || null;
+  // ✅ Farrington availability from precheck (before any analysis)
+  const preWeeks = typeof readiness?.weeksCoverage === "number" ? readiness.weeksCoverage : null;
+  const farringtonAvailablePre = readiness?.ok === true && typeof preWeeks === "number" ? preWeeks >= 52 : null;
+  const fDisabledPre = hasChecked && (farringtonAvailablePre === false);
+
+  // ✅ Farrington (backend) data sufficiency message (after analysis, if any)
+  const fSuff = runData?.results?.farrington?.dataSufficiency || null;
+  const fDisabledAfterRun = !!(fSuff && fSuff.ok === false);
 
   const whyText = (() => {
     const parts = [];
@@ -893,9 +948,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     <div className="dash" dir={isRTL ? "rtl" : "ltr"}>
       <style>{styles}</style>
 
-      {/* =========================
-          ✅ Top Panel (Inputs + Upload)
-         ========================= */}
       <section className="panel">
         <div className="panelHeader">
           <div className="titleWrap">
@@ -925,15 +977,13 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               const dr = payload?.dateRange;
               if (dr?.start || dr?.end) setDataRange(dr);
 
-              // ✅ refresh health time
+              // ✅ بعد رفع جديد: نعيد حالة الفحص (مهم)
+              setHasChecked(false);
+              setReadiness({ loading: false, ok: null, reason: null, overallN: null, weeksCoverage: null });
+
               fetchJSON(`${apiBase}/health`)
                 .then((hj) => setLastUpdated(hj?.time || hj?.timestamp || null))
                 .catch(() => {});
-
-              // ✅ trigger precheck after upload (direct)
-              try {
-                fetchPrecheck();
-              } catch {}
             }}
           />
         </div>
@@ -943,7 +993,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             <label>{t.scope}</label>
             <Dropdown dir={isRTL ? "rtl" : "ltr"} value={scopeMode} onChange={(v) => setScopeMode(v)} options={getScopeOptions(t)} />
           </div>
-
           <div className="actions" style={{ alignSelf: "end" }} />
         </div>
 
@@ -974,7 +1023,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         <div className="formRow">
           <div className="field">
             <label>{t.signal}</label>
-            <input value={derivedSignalLabel} readOnly />
+            <input value={derivedSignalLabelText} readOnly />
             <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
               {t.signalHint}
             </div>
@@ -1002,11 +1051,25 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <div>
                 <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>{t.startDate}</div>
-                <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => {
+                    setStartDate(e.target.value);
+                    setHasChecked(false);
+                  }}
+                />
               </div>
               <div>
                 <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>{t.endDate}</div>
-                <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => {
+                    setEndDate(e.target.value);
+                    setHasChecked(false);
+                  }}
+                />
               </div>
             </div>
             <div style={{ marginTop: 10 }}>
@@ -1016,6 +1079,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 onClick={() => {
                   setStartDate("");
                   setEndDate("");
+                  setHasChecked(false);
                 }}
               >
                 {t.clearDates}
@@ -1028,7 +1092,10 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             <Dropdown
               dir={isRTL ? "rtl" : "ltr"}
               value={preset}
-              onChange={(v) => setPreset(v)}
+              onChange={(v) => {
+                setPreset(v);
+                setHasChecked(false);
+              }}
               options={[
                 { value: "low", label: t.presetLow },
                 { value: "standard", label: t.presetStandard },
@@ -1052,36 +1119,36 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 CUSUM
               </button>
 
-              {/* ✅ NEW: Farrington disabled when not ready */}
+              {/* ✅ Farrington chip becomes non-clickable if precheck says unavailable */}
               <button
                 type="button"
-                className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""}`}
-                onClick={() => !fDisabled && toggleMethod("farrington")}
-                disabled={fDisabled}
+                className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""} ${fDisabledPre ? "chipBtnOff" : ""}`}
                 title={
-                  fDisabled
+                  fDisabledPre
                     ? lang === "ar"
-                      ? `Farrington غير متاح الآن: ${String(fReason || "INSUFFICIENT_DATA")}`
-                      : `Farrington unavailable: ${String(fReason || "INSUFFICIENT_DATA")}`
+                      ? "Farrington يحتاج ≥ 52 أسبوع تغطية"
+                      : "Farrington requires ≥ 52 weeks coverage"
                     : ""
                 }
-                style={fDisabled ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
+                onClick={() => {
+                  if (fDisabledPre) return;
+                  toggleMethod("farrington");
+                }}
+                disabled={fDisabledPre}
               >
                 Farrington
               </button>
             </div>
-
-            {/* ✅ NEW: small readiness hint */}
-            {readiness.loading ? (
-              <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-                {lang === "ar" ? "جاري فحص جاهزية البيانات…" : "Checking data readiness…"}
-              </div>
-            ) : null}
           </div>
 
           <div className="actions">
             <button type="button" className="dangerBtn" onClick={() => setPreset("high")} disabled={loading}>
               {t.quickHigh}
+            </button>
+
+            {/* ✅ NEW: Precheck button */}
+            <button type="button" className="ghostBtn" onClick={loadReadiness} disabled={loading || readiness?.loading}>
+              {readiness?.loading ? (lang === "ar" ? "جاري الفحص…" : "Checking…") : (lang === "ar" ? "فحص البيانات" : "Check data")}
             </button>
 
             <button type="button" className="primaryBtn" onClick={runAnalysis} disabled={!canRunNow}>
@@ -1098,22 +1165,52 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
-        {/* ✅ NEW: explicit "no data" message */}
-        {noData ? (
-          <div className="muted" style={{ marginTop: 10 }}>
-            {lang === "ar"
-              ? "لا توجد بيانات للفلاتر الحالية. جرّب توسيع الفترة أو رفع ملف بيانات."
-              : "No data for the current filters. Try expanding the date range or uploading data."}
-          </div>
-        ) : null}
+        {/* ✅ Precheck summary */}
+        <div style={{ marginTop: 10 }}>
+          {!hasChecked ? (
+            <div className="muted">
+              {lang === "ar"
+                ? "قبل التحليل: اضغط «فحص البيانات» لتحديد التحليلات المتاحة."
+                : "Before running: click “Check data” to determine which analyses are available."}
+            </div>
+          ) : (
+            <div className="muted" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <span className="tinyPill">
+                {lang === "ar" ? "العينة N" : "Sample N"}: {typeof readiness?.overallN === "number" ? readiness.overallN : "—"}
+              </span>
+              <span className="tinyPill">
+                {lang === "ar" ? "التغطية (أسابيع)" : "Coverage (weeks)"}: {typeof readiness?.weeksCoverage === "number" ? readiness.weeksCoverage : "—"}
+              </span>
+              {fDisabledPre ? (
+                <span className="tinyPill">{lang === "ar" ? "Farrington غير متاح" : "Farrington unavailable"}</span>
+              ) : (
+                <span className="tinyPill">{lang === "ar" ? "Farrington متاح" : "Farrington available"}</span>
+              )}
+              {readiness?.ok === false ? (
+                <span className="tinyPill">{lang === "ar" ? "تنبيه" : "Warning"}: {String(readiness?.reason || "PRECHECK_UNAVAILABLE")}</span>
+              ) : null}
+              {readiness?.reason ? (
+                <span className="tinyPill">
+                  {lang === "ar" ? "ملاحظة" : "Note"}: {String(readiness.reason)}
+                </span>
+              ) : null}
+            </div>
+          )}
+        </div>
 
         {errMsg ? (
           <div className="muted" style={{ marginTop: 10 }}>
             {t.error} {safeText(errMsg)}
-            <div style={{ marginTop: 8 }}>
-              <button type="button" className="ghostBtn" onClick={runAnalysis} disabled={!canRunNow}>
-                {t.retry}
-              </button>
+            <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {!hasChecked ? (
+                <button type="button" className="ghostBtn" onClick={loadReadiness}>
+                  {lang === "ar" ? "فحص البيانات" : "Check data"}
+                </button>
+              ) : (
+                <button type="button" className="ghostBtn" onClick={runAnalysis}>
+                  {t.retry}
+                </button>
+              )}
             </div>
           </div>
         ) : null}
@@ -1122,7 +1219,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           <div className="mini">
             <div className="miniRow">
               <div className="miniKey">{t.dataset}</div>
-              <div className="miniVal">{lastUpload?.ok ? t.uploadOk : t.notAvailable}</div>
+              <div className="miniVal">{dataset}</div>
             </div>
             <div className="miniRow">
               <div className="miniKey">{t.scope}</div>
@@ -1222,13 +1319,23 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                     <b>{t.actions}</b> — {actionsText}
                   </div>
 
-                  {/* ✅ NEW: Farrington message based on precheck */}
-                  {fDisabled ? (
+                  {/* ✅ Info from precheck (before run) */}
+                  {fDisabledPre ? (
                     <div style={{ marginTop: 2, opacity: 0.92 }}>
                       <b>{lang === "ar" ? "معلومة:" : "Info:"}</b>{" "}
                       {lang === "ar"
-                        ? `Farrington الموسمي غير متاح حاليًا بسبب: ${String(fReason || "INSUFFICIENT_DATA")}.`
-                        : `Seasonal Farrington is currently unavailable due to: ${String(fReason || "INSUFFICIENT_DATA")}.`}
+                        ? `Farrington يحتاج تغطية زمنية كافية (≥ 52 أسبوع). التغطية الحالية: ${String(preWeeks ?? "—")}.`
+                        : `Farrington requires sufficient time coverage (≥ 52 weeks). Current coverage: ${String(preWeeks ?? "—")}.`}
+                    </div>
+                  ) : null}
+
+                  {/* ✅ Info from backend (after run), if method returned disabled */}
+                  {fDisabledAfterRun ? (
+                    <div style={{ marginTop: 2, opacity: 0.92 }}>
+                      <b>{lang === "ar" ? "معلومة:" : "Info:"}</b>{" "}
+                      {lang === "ar"
+                        ? `تم تعطيل إنذارات Farrington بسبب: ${String(fSuff?.reason || "INSUFFICIENT_DATA")}.`
+                        : `Farrington alerts were disabled due to: ${String(fSuff?.reason || "INSUFFICIENT_DATA")}.`}
                     </div>
                   ) : null}
 
