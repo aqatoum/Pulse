@@ -1,4 +1,4 @@
-// apps/pulse-portal/src/pages/SurveillanceDashboard.jsx
+// apps/pulse-portal/src/pages/surveillance/SurveillanceDashboard.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import DecisionCard from "../components/DecisionCard.jsx";
 import SimpleSeriesChart from "../components/SimpleSeriesChart.jsx";
@@ -34,263 +34,56 @@ import {
   ParamSlider,
 } from "./surveillance/index.js";
 
+// ✅ ISO country localization (professional)
+import { countryLabel, normalizeCountryToISO2 } from "../utils/country.js";
+
+
+
 /* =========================
-   ✅ Styles (Global-ish look)
+   ✅ Nationality (ISO2-first)
    ========================= */
-const styles = `
-  :root{
-    --bg: #0B1220;
-    --card: rgba(255,255,255,0.06);
-    --card2: rgba(0,0,0,0.22);
-    --stroke: rgba(255,255,255,0.10);
-    --stroke2: rgba(255,255,255,0.14);
-    --text: rgba(255,255,255,0.92);
-    --muted: rgba(255,255,255,0.70);
+function normalizeNationalityCode(value) {
+  return normalizeCountryToISO2(value) || "UNKNOWN";
+}
 
-    --info: #10B981;
-    --watch: #F59E0B;
-    --alert: #EF4444;
-    --ink: rgba(0,0,0,0.88);
-  }
+function localizeNationality(value, lang) {
+  return countryLabel(value, lang);
+}
 
-  .dash{
-    min-height: 100vh;
-    padding: 18px;
-    display: grid;
-    gap: 14px;
-    background: radial-gradient(900px 600px at 15% 10%, rgba(16,185,129,0.10), transparent 55%),
-                radial-gradient(900px 600px at 85% 15%, rgba(245,158,11,0.10), transparent 55%),
-                radial-gradient(900px 600px at 70% 75%, rgba(239,68,68,0.08), transparent 55%),
-                var(--bg);
-    color: var(--text);
-  }
+/**
+ * ✅ Consolidate nationality groups by ISO2
+ * - Prevent duplicates when backend/CSV uses mixed formats (DE/DEU/Germany/ألمانيا).
+ * - Produces stable grouping on nationalityCode.
+ */
+function consolidateNationalityGroups(items) {
+  const arr = Array.isArray(items) ? items : [];
+  const map = new Map();
 
-  .panel{
-    border-radius: 18px; padding: 16px;
-    background: var(--card);
-    border: 1px solid var(--stroke);
-    backdrop-filter: blur(10px);
-  }
+  for (const it of arr) {
+    const raw = it?.nationalityCode || it?.countryCode || it?.iso2 || it?.iso3 || it?.nationality || it?.country;
+    const code = normalizeNationalityCode(raw);
 
-  .panelHeader{ display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; margin-bottom: 12px; }
-  .titleWrap{ display:grid; gap: 6px; }
-  .panelTitle{ font-weight: 950; font-size: 20px; letter-spacing: .2px; }
-  .panelSub{ opacity: .86; font-size: 13px; line-height: 1.55; max-width: 980px; }
-  .panelHint{ opacity:.78; font-size: 12px; line-height: 1.55; max-width: 980px; }
-
-  .infoGrid{ display:grid; grid-template-columns: 1.3fr 1fr; gap: 12px; margin-top: 10px; }
-  .infoCard{
-    border-radius: 16px; padding: 14px;
-    background: rgba(0,0,0,0.16);
-    border: 1px solid rgba(255,255,255,0.10);
-  }
-  .infoCardTitle{ font-weight: 950; margin-bottom: 6px; }
-  .infoCardBody{ opacity: .86; font-size: 13px; line-height: 1.7; }
-
-  .formRow{ display:grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin-bottom: 10px; }
-  .field label{ display:block; font-size: 12px; opacity:.85; margin-bottom: 6px; }
-  .field input{
-    width:100%; border-radius: 12px; border: 1px solid var(--stroke2);
-    background: var(--card2); color: var(--text);
-    padding: 10px 12px; outline:none;
-  }
-  .field input:focus{ border-color: rgba(255,255,255,0.28); box-shadow: 0 0 0 3px rgba(255,255,255,0.06); }
-
-  .actions{ display:flex; gap: 10px; align-items:center; flex-wrap: wrap; justify-content: flex-end; }
-  .primaryBtn{
-    border:0; border-radius: 12px; padding: 10px 14px;
-    font-weight: 950; cursor:pointer;
-    background: rgba(255,255,255,0.92); color: var(--ink);
-  }
-  .primaryBtn:disabled{ opacity:.6; cursor:not-allowed; }
-  .ghostBtn{
-    border-radius: 12px; padding: 10px 14px; font-weight: 950; cursor:pointer;
-    background: rgba(255,255,255,0.08); color: var(--text);
-    border: 1px solid var(--stroke2);
-  }
-  .ghostBtn:disabled{ opacity:.55; cursor:not-allowed; }
-  .dangerBtn{
-    border-radius: 12px; padding: 10px 14px; font-weight: 950; cursor:pointer;
-    background: rgba(245, 158, 11, 0.14); color: var(--text);
-    border: 1px solid rgba(245, 158, 11, 0.35);
+    const prev = map.get(code);
+    if (!prev) {
+      map.set(code, {
+        ...it,
+        nationalityCode: code,
+        // keep original in case useful
+        _rawNationality: raw ?? null,
+        n: Number(it?.n || 0),
+        cases: Number(pickCases(it) || it?.cases || 0),
+      });
+    } else {
+      prev.n = Number(prev.n || 0) + Number(it?.n || 0);
+      prev.cases = Number(prev.cases || 0) + Number(pickCases(it) || it?.cases || 0);
+    }
   }
 
-  .miniGrid{ display:grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 10px; }
-  .mini{ border-radius: 14px; padding: 10px 12px; background: rgba(0,0,0,0.18); border: 1px solid rgba(255,255,255,0.10); }
-  .miniRow{ display:flex; justify-content:space-between; gap: 10px; font-size: 12px; line-height: 1.6; }
-  .miniKey{ opacity:.75; }
-  .miniVal{ font-weight: 900; opacity:.95; text-align: end; }
-
-  .grid{ display:grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
-  .card{
-    border-radius: 18px; padding: 16px;
-    background: var(--card);
-    border: 1px solid var(--stroke);
-  }
-  .cardWide{ grid-column: 1 / -1; }
-  .cardHeader{ display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom: 10px; }
-  .cardTitle{ font-weight: 950; letter-spacing: .2px; }
-
-  .muted{ opacity:.85; font-size: 13px; line-height: 1.7; }
-  .reportBox2{ background: rgba(0,0,0,0.20); border: 1px solid rgba(255,255,255,0.12); color: var(--text); }
-
-  .tinyPill{
-    display:inline-flex; align-items:center; gap:6px;
-    border-radius: 999px;
-    padding: 6px 10px;
-    border: 1px solid rgba(255,255,255,0.14);
-    background: rgba(255,255,255,0.06);
-    font-weight: 900;
-    font-size: 12px;
-  }
-
-  .statusCard{
-    border-radius: 20px;
-    padding: 18px;
-    background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(0,0,0,0.22));
-    border: 1px solid rgba(255,255,255,0.12);
-    box-shadow: 0 14px 40px rgba(0,0,0,0.28);
-    overflow:hidden;
-    position: relative;
-  }
-  .statusGlow{
-    position:absolute; inset: -80px;
-    filter: blur(28px);
-    opacity: 0.9;
-    pointer-events:none;
-  }
-  .statusTop{ display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; position: relative; }
-  .statusTitle{ font-weight: 950; font-size: 16px; opacity: .95; }
-  .statusBadge{
-    display:inline-flex; align-items:center; gap: 8px;
-    border-radius: 999px;
-    padding: 8px 12px;
-    font-weight: 950;
-    border: 1px solid rgba(255,255,255,0.14);
-    background: rgba(0,0,0,0.18);
-  }
-  .statusMain{
-    margin-top: 10px;
-    display:grid;
-    grid-template-columns: 1.2fr 1fr;
-    gap: 14px;
-    position: relative;
-  }
-  .statusBig{
-    font-size: 34px;
-    font-weight: 950;
-    letter-spacing: .2px;
-    line-height: 1.1;
-  }
-  .statusMeta{ display:grid; gap: 8px; }
-  .kv{ display:flex; justify-content:space-between; gap: 10px; font-size: 13px; }
-  .k{ opacity: .78; }
-  .v{ font-weight: 900; opacity: .95; text-align:end; }
-  .statusText{
-    margin-top: 12px;
-    border-radius: 14px;
-    padding: 12px;
-    background: rgba(0,0,0,0.18);
-    border: 1px solid rgba(255,255,255,0.10);
-    font-size: 13px;
-    line-height: 1.75;
-    position: relative;
-  }
-  .statusText b{ font-weight: 950; }
-
-  .linkBtn{
-    border-radius: 12px;
-    padding: 10px 14px;
-    font-weight: 950;
-    cursor:pointer;
-    background: rgba(255,255,255,0.10);
-    color: var(--text);
-    border: 1px solid rgba(255,255,255,0.14);
-  }
-  .linkBtn:hover{ border-color: rgba(255,255,255,0.26); }
-
-  /* Stratification */
-  .stratGrid{ display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
-  .stratCard{
-    border-radius: 16px;
-    padding: 12px;
-    background: rgba(0,0,0,0.16);
-    border: 1px solid rgba(255,255,255,0.10);
-    overflow:hidden;
-  }
-  .stratTitle{ font-weight: 950; margin-bottom: 10px; display:flex; justify-content:space-between; gap: 10px; }
-  .stratMeta{ opacity:.80; font-size: 12px; }
-  .row{
-    display:grid;
-    grid-template-columns: 1.2fr .6fr .8fr;
-    gap: 10px;
-    align-items:center;
-    margin-bottom: 8px;
-  }
-  .rowLabel{ font-weight: 900; opacity:.92; }
-  .rowCount{ opacity:.88; font-size: 12px; text-align:end; }
-  .rowPct{ font-weight: 950; text-align:end; }
-  .bar{
-    margin-top: 6px;
-    height: 8px;
-    border-radius: 999px;
-    background: rgba(255,255,255,0.08);
-    border: 1px solid rgba(255,255,255,0.10);
-    overflow:hidden;
-  }
-  .fill{
-    height: 100%;
-    border-radius: 999px;
-    background: linear-gradient(90deg, rgba(16,185,129,0.95), rgba(245,158,11,0.92), rgba(239,68,68,0.92));
-  }
-
-  .footer{
-    margin-top: 4px;
-    border-radius: 18px;
-    padding: 14px 16px;
-    background: rgba(0,0,0,0.16);
-    border: 1px solid rgba(255,255,255,0.10);
-    opacity: .90;
-    font-size: 12px;
-    line-height: 1.7;
-    text-align: center;
-  }
-
-  @media (max-width: 980px){
-    .infoGrid{ grid-template-columns: 1fr; }
-  }
-  @media (max-width: 960px){
-    .stratGrid{ grid-template-columns: 1fr; }
-  }
-  @media (max-width: 860px){
-    .formRow{ grid-template-columns: 1fr; }
-    .grid{ grid-template-columns: 1fr; }
-    .actions{ justify-content: stretch; }
-    .primaryBtn,.ghostBtn,.dangerBtn,.linkBtn{ width:100%; }
-    .miniVal{ text-align: start; }
-    .statusMain{ grid-template-columns: 1fr; }
-  }
-
-  /* chips */
-  .chipBtn{
-    border-radius: 999px;
-    padding: 8px 12px;
-    background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.14);
-    color: var(--text);
-    font-weight: 950;
-    cursor: pointer;
-    font-size: 12px;
-  }
-  .chipBtnOn{
-    background: rgba(255,255,255,0.14);
-    border-color: rgba(255,255,255,0.24);
-  }
-  .chipBtnOff{
-    opacity: .55;
-    cursor:not-allowed;
-  }
-`;
+  return Array.from(map.values()).map((x) => ({
+    ...x,
+    rate: x.n ? x.cases / x.n : 0,
+  }));
+}
 
 /* =========================
    ✅ Trend + Confidence helpers
@@ -421,75 +214,15 @@ function listMethodAlerts(runData) {
 
   return out;
 }
+
 function formatDate(value, lang) {
   if (!value) return "—";
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return String(value);
 
   return lang === "ar"
-    ? d.toLocaleString("ar-EG", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : d.toLocaleString("en-GB", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-}
-
-/* =========================
-   ✅ Strat UI Card
-   ========================= */
-function StratCard({ title, items, getKey, t }) {
-  const arr = Array.isArray(items) ? items : [];
-  const maxN = arr.reduce((m, it) => Math.max(m, Number(it?.n || 0)), 0) || 1;
-
-  return (
-    <div className="stratCard">
-      <div className="stratTitle">
-        <span>{title}</span>
-        <span className="stratMeta">{arr.length ? `${arr.length}` : ""}</span>
-      </div>
-
-      {!arr.length ? (
-        <div className="muted">{t.empty}</div>
-      ) : (
-        arr.slice(0, 12).map((it, idx) => {
-          const label = getKey(it);
-          const n = Number(it?.n || 0);
-          const rate = pickRate(it);
-          const pctS = fmtPctStrat(rate);
-          const weight = Math.round((n / maxN) * 100);
-
-          return (
-            <div key={idx} style={{ marginBottom: 10 }}>
-              <div className="row">
-                <div className="rowLabel">{label}</div>
-                <div className="rowCount">{Number.isFinite(n) ? n : "—"}</div>
-                <div className="rowPct">{pctS}</div>
-              </div>
-
-              <div className="bar" title={`${t.cases}: ${pickCases(it) ?? "—"} • ${t.signalRate}: ${pctS}`}>
-                <div
-                  className="fill"
-                  style={{
-                    width: barWidth(rate),
-                    opacity: 0.75 + 0.25 * (weight / 100),
-                  }}
-                />
-              </div>
-            </div>
-          );
-        })
-      )}
-    </div>
-  );
+    ? d.toLocaleString("ar-EG", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleString("en-GB", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 /* =========================
@@ -543,6 +276,7 @@ function normalizePrecheck(resp) {
 export default function SurveillanceDashboard({ lang = "en" }) {
   const t = useMemo(() => TXT[lang] || TXT.en, [lang]);
   const isRTL = lang === "ar";
+  const [popTab, setPopTab] = useState("sex"); // sex | age | nat
 
   const rawBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || "http://localhost:8080";
   const apiBase = String(rawBase).replace(/\/+$/, "");
@@ -554,7 +288,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     return `${apiBase}/api/${p}`;
   }
 
-  // ✅ Safe fetch wrapper: supports fetchJSON(url) and fetchJSON(url, signal)
   async function fetchJSONSafe(url, signal) {
     try {
       return await fetchJSON(url, signal);
@@ -584,8 +317,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const [methods, setMethods] = useState({ ewma: true, cusum: true, farrington: true });
 
   // ✅ Time filter + preset
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  const [startDate, setStartDate] = useState(""); // YYYY-MM-DD
+  const [endDate, setEndDate] = useState(""); // YYYY-MM-DD
   const [preset, setPreset] = useState("standard");
 
   // Advanced preset params
@@ -659,7 +392,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
   function toggleMethod(key) {
     if (!hasChecked) {
-      setErrMsg(lang === "ar" ? "اضغط «فحص البيانات» أولًا." : "Please click “Check data” first.");
+      setErrMsg(lang === "ar" ? "يرجى تنفيذ «فحص البيانات» أولًا لتحديد جاهزية التحليلات." : "Please run “Check data” first to confirm readiness.");
       return;
     }
     setMethods((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -714,7 +447,6 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
   function scopeLabel() {
     if (scopeMode === "global") return t.modeGlobal;
-
     return scopeMode === "facility"
       ? `${t.modeFacility}: ${facilityId?.trim() || t.notAvailable}`
       : `${t.modeRegion}: ${regionId?.trim() || t.notAvailable}`;
@@ -792,7 +524,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
     }
 
     if (!hasChecked) {
-      setErrMsg(lang === "ar" ? "اضغط «فحص البيانات» أولًا." : "Please click “Check data” first.");
+      setErrMsg(lang === "ar" ? "يرجى تنفيذ «فحص البيانات» أولًا قبل تشغيل التحليل." : "Please run “Check data” before analysis.");
       return;
     }
 
@@ -820,11 +552,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
       const m = m0.filter((x) => (x === "farrington" ? farringtonAvailable : true));
       if (!m.length) {
-        setErrMsg(
-          lang === "ar"
-            ? "لا توجد تحليلات متاحة للتشغيل بناءً على فحص البيانات."
-            : "No analyses are available to run based on the data precheck."
-        );
+        setErrMsg(lang === "ar" ? "لا توجد تحليلات متاحة للتشغيل بناءً على فحص البيانات الحالي." : "No analyses are available based on the current precheck.");
         return;
       }
 
@@ -924,25 +652,28 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const statusLabel = decision === "ALERT" ? t.alert : decision === "WATCH" ? t.watch : t.info;
   const trustMethods = methodsLabel(selectedMethods());
 
-  // ✅ “مصدر البيانات” كقيمة واضحة (بدون تكرار كلمة Data/Dataset)
   const datasetValue = useMemo(() => {
     const src = lastUpload?.ok
-      ? (lang === "ar" ? "ملف CSV مرفوع" : "Uploaded CSV")
-      : (lang === "ar" ? "قاعدة بيانات النظام" : "System database");
+      ? lang === "ar"
+        ? "بيانات مختبرية من ملف CSV (تجربة/تحقق)"
+        : "Laboratory data from uploaded CSV (pilot/validation)"
+      : lang === "ar"
+      ? "بيانات مختبرية من قاعدة بيانات النظام"
+      : "Laboratory data from system database";
 
-    if (scopeMode === "global") return `${src} • ${lang === "ar" ? "نطاق: الكل" : "Scope: global"}`;
-    if (scopeMode === "facility") return `${src} • ${lang === "ar" ? "مرفق" : "Facility"}: ${facilityId?.trim() || (lang === "ar" ? "غير محدد" : "unspecified")}`;
-    return `${src} • ${lang === "ar" ? "منطقة" : "Region"}: ${regionId?.trim() || (lang === "ar" ? "غير محدد" : "unspecified")}`;
+    if (scopeMode === "global") return `${src} • ${lang === "ar" ? "النطاق: الأردن (وطني)" : "Scope: Jordan (national)"}`;
+    if (scopeMode === "facility")
+      return `${src} • ${lang === "ar" ? "المركز الصحي" : "Facility"}: ${facilityId?.trim() || (lang === "ar" ? "غير محدد" : "unspecified")}`;
+    return `${src} • ${lang === "ar" ? "المنطقة/المديرية" : "Region"}: ${regionId?.trim() || (lang === "ar" ? "غير محدد" : "unspecified")}`;
   }, [lastUpload?.ok, lang, scopeMode, facilityId, regionId]);
 
-  // ✅ الفترة الزمنية كقيمة واضحة (بدون تكرار كلمة Period/الفترة داخل النص)
   const dateRangeValue = useMemo(() => {
     if (dataRange?.start || dataRange?.end) {
       const s = dataRange?.start || "—";
       const e = dataRange?.end || "—";
       return `${s} → ${e}`;
     }
-    return lang === "ar" ? "كامل البيانات المتاحة" : "All available data";
+    return lang === "ar" ? "كامل البيانات المتاحة ضمن النظام" : "All available data in the system";
   }, [dataRange?.start, dataRange?.end, lang]);
 
   const ewCfg = adaptEWMA(chartsPayload?.ewma);
@@ -966,7 +697,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
   const preWeeks = typeof readiness?.weeksCoverage === "number" ? readiness.weeksCoverage : null;
   const farringtonAvailablePre = readiness?.ok === true && typeof preWeeks === "number" ? preWeeks >= 52 : null;
-  const fDisabledPre = hasChecked && (farringtonAvailablePre === false);
+  const fDisabledPre = hasChecked && farringtonAvailablePre === false;
 
   const fSuff = runData?.results?.farrington?.dataSufficiency || null;
   const fDisabledAfterRun = !!(fSuff && fSuff.ok === false);
@@ -982,21 +713,21 @@ export default function SurveillanceDashboard({ lang = "en" }) {
   const actionsText = useMemo(() => {
     if (uiDecision === "alert") {
       return lang === "ar"
-        ? "يوصى بمراجعة الوضع فورًا: تأكيد جودة البيانات، ثم فحص التقسيم السكاني والمرفق/المنطقة الأكثر مساهمة."
-        : "Immediate review recommended: validate data quality, then inspect subgroups and contributing facility/region.";
+        ? "يوصى بتفعيل مسار الاستجابة المبكر وفق بروتوكولات الترصد: التحقق من جودة البيانات، ثم مراجعة التقسيم السكاني وتحديد المرفق/المنطقة الأكثر مساهمة، والتنسيق مع الجهات المختصة حسب السلسلة المعتمدة."
+        : "Recommended early-response flow per surveillance protocols: validate data quality, inspect subgroups, identify contributing facility/region, and coordinate with relevant authorities per the approved chain.";
     }
     if (uiDecision === "watch") {
       return lang === "ar"
-        ? "إشارة تستدعي المراقبة: يوجد تنبيه من طريقة واحدة أو أكثر. يُنصح بالمتابعة القريبة خلال الأسابيع القادمة ومقارنة النطاق عند توفر بيانات أكثر."
-        : "Monitoring signal: one or more methods triggered an alert. Follow closely over the coming weeks and compare scope as more data arrive.";
+        ? "إشارة تستدعي المتابعة: توجد مؤشرات إنذار من طريقة واحدة أو أكثر. يُنصح بالمراقبة القريبة خلال الأسابيع القادمة ومقارنة النطاقات عند توافر بيانات إضافية."
+        : "Monitoring signal: one or more methods flagged. Follow closely in upcoming weeks and compare scopes as additional data arrive.";
     }
-    return lang === "ar" ? "لا يوجد إجراء عاجل. الاستمرار في الرصد ورفع العينة لتحسين الثقة." : "No urgent action. Continue monitoring and grow sample size to improve confidence.";
+    return lang === "ar"
+      ? "لا يوجد إجراء عاجل. الاستمرار بالرصد ورفع حجم البيانات يحسن الثقة الإحصائية ويقوّي حساسية الاكتشاف المبكر."
+      : "No urgent action. Continue monitoring; larger data volumes improve statistical confidence and early-detection sensitivity.";
   }, [uiDecision, lang]);
 
   return (
     <div className="dash" dir={isRTL ? "rtl" : "ltr"}>
-      <style>{styles}</style>
-
       <section className="panel">
         <div className="panelHeader">
           <div className="titleWrap">
@@ -1011,9 +742,10 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             <div className="infoCardTitle">{t.initiativeTitle}</div>
             <div className="infoCardBody">{t.initiativeBody}</div>
           </div>
+
           <div className="infoCard">
-            <div className="infoCardTitle">{t.unDisclaimerTitle}</div>
-            <div className="infoCardBody">{t.unDisclaimerBody}</div>
+            <div className="infoCardTitle">{t.pilotTitle}</div>
+            <div className="infoCardBody">{t.pilotBody}</div>
           </div>
         </div>
 
@@ -1047,7 +779,15 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         <div className="formRow" style={{ marginTop: 12 }}>
           <div className="field">
             <label>{t.scope}</label>
-            <Dropdown dir={isRTL ? "rtl" : "ltr"} value={scopeMode} onChange={(v) => setScopeMode(v)} options={getScopeOptions(t)} />
+            <Dropdown
+              dir={isRTL ? "rtl" : "ltr"}
+              value={scopeMode}
+              onChange={(v) => {
+                setScopeMode(v);
+                setHasChecked(false);
+              }}
+              options={getScopeOptions(t)}
+            />
           </div>
           <div className="actions" style={{ alignSelf: "end" }} />
         </div>
@@ -1056,23 +796,45 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           {scopeMode === "facility" ? (
             <div className="field">
               <label>{t.facility}</label>
-              <input value={facilityId} onChange={(e) => setFacilityId(e.target.value)} placeholder={t.placeholderFacility} />
+              <input
+                value={facilityId}
+                onChange={(e) => {
+                  setFacilityId(e.target.value);
+                  setHasChecked(false);
+                }}
+                placeholder={t.placeholderFacility}
+              />
             </div>
           ) : scopeMode === "region" ? (
             <div className="field">
               <label>{t.region}</label>
-              <input value={regionId} onChange={(e) => setRegionId(e.target.value)} placeholder={t.placeholderRegion} />
+              <input
+                value={regionId}
+                onChange={(e) => {
+                  setRegionId(e.target.value);
+                  setHasChecked(false);
+                }}
+                placeholder={t.placeholderRegion}
+              />
             </div>
           ) : (
             <div className="field">
-              <label>{isRTL ? "الكل" : "All"}</label>
+              <label>{isRTL ? "وطني (الأردن)" : "National (Jordan)"}</label>
               <input value={t.modeGlobal} readOnly />
             </div>
           )}
 
           <div className="field">
             <label>{t.test}</label>
-            <Dropdown dir={isRTL ? "rtl" : "ltr"} value={testCode} onChange={(v) => setTestCode(v)} options={getTestOptions(t)} />
+            <Dropdown
+              dir={isRTL ? "rtl" : "ltr"}
+              value={testCode}
+              onChange={(v) => {
+                setTestCode(v);
+                setHasChecked(false);
+              }}
+              options={getTestOptions(t)}
+            />
           </div>
         </div>
 
@@ -1091,8 +853,8 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               style={{
                 padding: 10,
                 borderRadius: 12,
-                border: "1px solid rgba(255,255,255,0.14)",
-                background: "rgba(255,255,255,0.06)",
+                border: "1px solid var(--stroke2)",
+                background: "var(--card)",
                 fontSize: 12,
               }}
             >
@@ -1101,33 +863,47 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         </div>
 
+        {/* ✅ Time Filter (RESTORED properly) */}
         <div className="formRow">
           <div className="field">
             <label>{t.timeFilter}</label>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>{t.startDate}</div>
+
+            <div
+              className="dateRow"
+              style={{
+                display: "grid",
+                gap: 10,
+                gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                marginTop: 8,
+              }}
+            >
+              <div className="field" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12, opacity: 0.8 }}>{lang === "ar" ? "من تاريخ" : "Start date"}</label>
                 <input
                   type="date"
                   value={startDate}
                   onChange={(e) => {
-                    setStartDate(e.target.value);
+                    setStartDate(e.target.value || "");
                     setHasChecked(false);
                   }}
+                  aria-label={lang === "ar" ? "تاريخ البداية" : "Start date"}
                 />
               </div>
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>{t.endDate}</div>
+
+              <div className="field" style={{ margin: 0 }}>
+                <label style={{ fontSize: 12, opacity: 0.8 }}>{lang === "ar" ? "إلى تاريخ" : "End date"}</label>
                 <input
                   type="date"
                   value={endDate}
                   onChange={(e) => {
-                    setEndDate(e.target.value);
+                    setEndDate(e.target.value || "");
                     setHasChecked(false);
                   }}
+                  aria-label={lang === "ar" ? "تاريخ النهاية" : "End date"}
                 />
               </div>
             </div>
+
             <div style={{ marginTop: 10 }}>
               <button
                 type="button"
@@ -1159,22 +935,23 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               ]}
             />
             <div className="muted" style={{ marginTop: 8 }}>
-              {lang === "ar" ? "Preset الحالي" : "Current preset"}: <span className="tinyPill">{presetLabel}</span>
+              {lang === "ar" ? "إعداد الحساسية الحالي" : "Current sensitivity"}: <span className="tinyPill">{presetLabel}</span>
             </div>
           </div>
         </div>
 
         {/* ✅ Methods chips */}
-        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 6 }}>
+        <div className="methodRow">
           <div className="field" style={{ flex: 1 }}>
             <label>{t.methods}</label>
 
-            <div className="chips" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div className="chips" role="group" aria-label={lang === "ar" ? "طرق التحليل" : "Analysis methods"}>
               <button
                 type="button"
                 className={`chipBtn ${methods.ewma ? "chipBtnOn" : ""} ${!hasChecked ? "chipBtnOff" : ""}`}
                 onClick={() => toggleMethod("ewma")}
                 disabled={!hasChecked}
+                aria-pressed={!!methods.ewma}
                 title={!hasChecked ? (lang === "ar" ? "افحص البيانات أولًا" : "Check data first") : ""}
               >
                 EWMA
@@ -1185,6 +962,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 className={`chipBtn ${methods.cusum ? "chipBtnOn" : ""} ${!hasChecked ? "chipBtnOff" : ""}`}
                 onClick={() => toggleMethod("cusum")}
                 disabled={!hasChecked}
+                aria-pressed={!!methods.cusum}
                 title={!hasChecked ? (lang === "ar" ? "افحص البيانات أولًا" : "Check data first") : ""}
               >
                 CUSUM
@@ -1193,25 +971,21 @@ export default function SurveillanceDashboard({ lang = "en" }) {
               <button
                 type="button"
                 className={`chipBtn ${methods.farrington ? "chipBtnOn" : ""} ${fDisabledPre ? "chipBtnOff" : ""}`}
-                title={
-                  fDisabledPre
-                    ? lang === "ar"
-                      ? "Farrington يحتاج ≥ 52 أسبوع تغطية"
-                      : "Farrington requires ≥ 52 weeks coverage"
-                    : ""
-                }
+                title={fDisabledPre ? (lang === "ar" ? "Farrington يحتاج ≥ 52 أسبوع تغطية" : "Farrington requires ≥ 52 weeks coverage") : ""}
                 onClick={() => {
                   if (fDisabledPre) return;
                   toggleMethod("farrington");
                 }}
                 disabled={fDisabledPre}
+                aria-pressed={!!methods.farrington}
               >
                 Farrington
               </button>
             </div>
           </div>
 
-          <div className="actions">
+          {/* ✅ Actions */}
+          <div className="actions actionsResponsive" role="group" aria-label={lang === "ar" ? "إجراءات التحليل" : "Analysis actions"}>
             <button type="button" className="ghostBtn" onClick={loadReadiness} disabled={loading || readiness?.loading}>
               {readiness?.loading ? (lang === "ar" ? "جاري الفحص…" : "Checking…") : lang === "ar" ? "فحص البيانات" : "Check data"}
             </button>
@@ -1221,11 +995,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             </button>
 
             <button type="button" className="ghostBtn" onClick={resetRun} disabled={loading}>
-              Reset
-            </button>
-
-            <button type="button" className="ghostBtn" onClick={copyReport} disabled={!reportText || loading}>
-              {copied ? t.copied : t.report}
+              {lang === "ar" ? "إعادة ضبط" : "Reset"}
             </button>
           </div>
         </div>
@@ -1235,16 +1005,17 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           {!hasChecked ? (
             <div className="muted">
               {lang === "ar"
-                ? "قبل التحليل: اضغط «فحص البيانات» لتحديد التحليلات المتاحة."
-                : "Before running: click “Check data” to determine which analyses are available."}
+                ? "قبل التشغيل: نفّذ «فحص البيانات» لتحديد الجاهزية والمنهجيات الممكن تشغيلها وفق التغطية وحجم العينة."
+                : "Before running: click “Check data” to confirm readiness, coverage, and available methods."}
             </div>
           ) : (
-            <div className="muted" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <div className="muted precheckRow">
               <span className="tinyPill">
-                {lang === "ar" ? "العينة N" : "Sample N"}: {typeof readiness?.overallN === "number" ? readiness.overallN : "—"}
+                {lang === "ar" ? "حجم العينة (N)" : "Sample (N)"}: {typeof readiness?.overallN === "number" ? readiness.overallN : "—"}
               </span>
               <span className="tinyPill">
-                {lang === "ar" ? "التغطية (أسابيع)" : "Coverage (weeks)"}: {typeof readiness?.weeksCoverage === "number" ? readiness.weeksCoverage : "—"}
+                {lang === "ar" ? "التغطية الزمنية (أسابيع)" : "Coverage (weeks)"}:{" "}
+                {typeof readiness?.weeksCoverage === "number" ? readiness.weeksCoverage : "—"}
               </span>
               {fDisabledPre ? (
                 <span className="tinyPill">{lang === "ar" ? "Farrington غير متاح" : "Farrington unavailable"}</span>
@@ -1252,7 +1023,9 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 <span className="tinyPill">{lang === "ar" ? "Farrington متاح" : "Farrington available"}</span>
               )}
               {readiness?.ok === false ? (
-                <span className="tinyPill">{lang === "ar" ? "تنبيه" : "Warning"}: {String(readiness?.reason || "PRECHECK_UNAVAILABLE")}</span>
+                <span className="tinyPill">
+                  {lang === "ar" ? "تنبيه" : "Warning"}: {String(readiness?.reason || "PRECHECK_UNAVAILABLE")}
+                </span>
               ) : null}
               {readiness?.reason ? (
                 <span className="tinyPill">
@@ -1264,7 +1037,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         </div>
 
         {errMsg ? (
-          <div className="muted" style={{ marginTop: 10 }}>
+          <div className="muted" style={{ marginTop: 10 }} role="alert" aria-live="polite">
             {t.error} {safeText(errMsg)}
             <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap" }}>
               {!hasChecked ? (
@@ -1280,7 +1053,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
           </div>
         ) : null}
 
-        {/* ✅ FIXED miniGrid: كل miniRow سطر واحد (مفتاح+قيمة) */}
+        {/* ✅ miniGrid */}
         <div className="miniGrid">
           <div className="mini">
             <div className="miniRow">
@@ -1306,8 +1079,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
             </div>
             <div className="miniRow">
               <div className="miniKey">{t.lastUpdated}</div>
-              <div className="miniVal">{lastUpdated ? formatDate(lastUpdated, lang) : t.notAvailable}
-</div>
+              <div className="miniVal">{lastUpdated ? formatDate(lastUpdated, lang) : t.notAvailable}</div>
             </div>
           </div>
         </div>
@@ -1325,10 +1097,10 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 style={{
                   background:
                     decisionKey === "alert"
-                      ? "radial-gradient(circle at 30% 30%, rgba(239,68,68,0.35), transparent 55%)"
+                      ? "radial-gradient(circle at 30% 30%, rgba(255,92,122,0.35), transparent 55%)"
                       : decisionKey === "watch"
-                      ? "radial-gradient(circle at 30% 30%, rgba(245,158,11,0.32), transparent 55%)"
-                      : "radial-gradient(circle at 30% 30%, rgba(16,185,129,0.30), transparent 55%)",
+                      ? "radial-gradient(circle at 30% 30%, rgba(255,211,105,0.30), transparent 55%)"
+                      : "radial-gradient(circle at 30% 30%, rgba(47,125,255,0.28), transparent 55%)",
                 }}
               />
 
@@ -1347,7 +1119,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                       height: 10,
                       borderRadius: 999,
                       background: theme.color,
-                      boxShadow: `0 0 0 6px rgba(255,255,255,0.06)`,
+                      boxShadow: "0 0 0 6px rgba(255,255,255,0.06)",
                       display: "inline-block",
                     }}
                   />
@@ -1394,16 +1166,16 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
                   {fDisabledPre ? (
                     <div style={{ marginTop: 2, opacity: 0.92 }}>
-                      <b>{lang === "ar" ? "معلومة:" : "Info:"}</b>{" "}
+                      <b>{lang === "ar" ? "تنبيه تقني:" : "Technical note:"}</b>{" "}
                       {lang === "ar"
-                        ? `Farrington يحتاج تغطية زمنية كافية (≥ 52 أسبوع). التغطية الحالية: ${String(preWeeks ?? "—")}.`
+                        ? `يتطلب Farrington تغطية زمنية كافية (≥ 52 أسبوع). التغطية الحالية: ${String(preWeeks ?? "—")}.`
                         : `Farrington requires sufficient time coverage (≥ 52 weeks). Current coverage: ${String(preWeeks ?? "—")}.`}
                     </div>
                   ) : null}
 
                   {fDisabledAfterRun ? (
                     <div style={{ marginTop: 2, opacity: 0.92 }}>
-                      <b>{lang === "ar" ? "معلومة:" : "Info:"}</b>{" "}
+                      <b>{lang === "ar" ? "تنبيه تقني:" : "Technical note:"}</b>{" "}
                       {lang === "ar"
                         ? `تم تعطيل إنذارات Farrington بسبب: ${String(fSuff?.reason || "INSUFFICIENT_DATA")}.`
                         : `Farrington alerts were disabled due to: ${String(fSuff?.reason || "INSUFFICIENT_DATA")}.`}
@@ -1412,25 +1184,38 @@ export default function SurveillanceDashboard({ lang = "en" }) {
 
                   {methodAlerts?.length ? (
                     <div style={{ marginTop: 2 }}>
-                      <b>{lang === "ar" ? "ملاحظة:" : "Note:"}</b>{" "}
+                      <b>{lang === "ar" ? "ملاحظة منهجية:" : "Method note:"}</b>{" "}
                       {lang === "ar"
-                        ? `تم رصد إنذار إحصائي بواسطة: ${methodAlerts.join(" + ")}. الحالة الرئيسية تعتمد قرار النظام (Consensus) وليس إنذار طريقة واحدة.`
-                        : `A statistical alert was detected by: ${methodAlerts.join(" + ")}. The main status follows system consensus, not a single-method alert.`}
+                        ? `تم رصد مؤشر إنذار بواسطة: ${methodAlerts.join(" + ")}. الحالة العامة تعتمد قرار الإجماع (Consensus) وليس نتيجة طريقة واحدة.`
+                        : `A signal was flagged by: ${methodAlerts.join(" + ")}. Overall status follows system consensus, not a single method.`}
                     </div>
                   ) : null}
                 </div>
 
-                <div className="actions" style={{ justifyContent: "flex-start", marginTop: 12 }}>
+                {/* ✅ Actions under results (Copy appears only after report exists) */}
+                <div className="statusActions" role="group" aria-label={lang === "ar" ? "إجراءات النتائج" : "Result actions"}>
                   <button type="button" className="linkBtn" onClick={() => setShowDetails((s) => !s)}>
                     {showDetails ? t.hideDetails : t.viewDetails}
                   </button>
+
+                  {reportText ? (
+                    <button type="button" className="primaryBtn" onClick={copyReport} aria-label={lang === "ar" ? "نسخ التقرير" : "Copy report"}>
+                      {copied ? t.copied : t.report}
+                    </button>
+                  ) : null}
+
+                  <span className="srOnly" role="status" aria-live="polite">
+                    {copied ? (lang === "ar" ? "تم نسخ التقرير" : "Report copied") : ""}
+                  </span>
                 </div>
               </div>
             </div>
           </div>
 
+          {/* ✅ Details — FULL WIDTH STACK: Charts -> Strat -> Narrative */}
           {showDetails ? (
             <>
+              {/* 1) Charts */}
               <div className="card cardWide">
                 <div className="cardHeader">
                   <div className="cardTitle">{t.chartsTitle}</div>
@@ -1446,6 +1231,7 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 </div>
               </div>
 
+              {/* 2) Stratification */}
               <div className="card cardWide">
                 <div className="cardHeader">
                   <div className="cardTitle">{t.strat}</div>
@@ -1455,33 +1241,149 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                   <div className="muted">{t.empty}</div>
                 ) : (
                   <div style={{ display: "grid", gap: 12 }}>
-                    <div className="mini">
-                      <div className="miniRow">
-                        <div className="miniKey">{t.totalSamples}</div>
-                        <div className="miniVal">{overallN}</div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: 12,
+                        gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                        alignItems: "start",
+                      }}
+                    >
+                      <div className="mini">
+                        <div className="miniRow">
+                          <div className="miniKey">{t.totalSamples}</div>
+                          <div className="miniVal">{overallN}</div>
+                        </div>
+                        <div className="miniRow">
+                          <div className="miniKey">{t.cases}</div>
+                          <div className="miniVal">{overallCases ?? "—"}</div>
+                        </div>
+                        <div className="miniRow">
+                          <div className="miniKey">{t.signalRate}</div>
+                          <div className="miniVal">{fmtPct(overallRate)}</div>
+                        </div>
                       </div>
-                      <div className="miniRow">
-                        <div className="miniKey">{t.cases}</div>
-                        <div className="miniVal">{overallCases ?? "—"}</div>
-                      </div>
-                      <div className="miniRow">
-                        <div className="miniKey">{t.signalRate}</div>
-                        <div className="miniVal">{fmtPct(overallRate)}</div>
-                      </div>
-                    </div>
 
-                    <div className="stratGrid">
-                      <StratCard title={t.bySex} items={profile?.bySex || []} getKey={(it) => keyLabelSex(it?.sex)} t={t} />
-                      <StratCard title={t.byAge} items={profile?.byAge || []} getKey={(it) => safeLabel(it?.ageBand)} t={t} />
-                      <StratCard title={t.byNationality} items={profile?.byNationality || []} getKey={(it) => safeLabel(it?.nationality)} t={t} />
+                      {/* ✅ Population breakdown — SINGLE BOX */}
+                      <div className="stratCard popBox">
+                        <div className="popHead">
+                          <div>
+                            <div className="popTitle">{lang === "ar" ? "التقسيم السكاني" : "Population breakdown"}</div>
+                            <div className="popSub">
+                              {lang === "ar"
+                                ? "عرض ضمن مربع واحد: اختر البعد (الجنس/العمر/الجنسية) ثم راجع أعلى الفئات."
+                                : "Single-box view: choose dimension (sex/age/nationality) and review top groups."}
+                            </div>
+                          </div>
+
+                          <div className="popSeg" role="tablist" aria-label={lang === "ar" ? "تبويبات التقسيم السكاني" : "Population breakdown tabs"}>
+                            <button
+                              type="button"
+                              id="tab-sex"
+                              role="tab"
+                              aria-selected={popTab === "sex"}
+                              aria-controls="panel-sex"
+                              className={`popSegBtn ${popTab === "sex" ? "popSegBtnOn" : ""}`}
+                              onClick={() => setPopTab("sex")}
+                            >
+                              {lang === "ar" ? "الجنس" : "Sex"}
+                            </button>
+                            <button
+                              type="button"
+                              id="tab-age"
+                              role="tab"
+                              aria-selected={popTab === "age"}
+                              aria-controls="panel-age"
+                              className={`popSegBtn ${popTab === "age" ? "popSegBtnOn" : ""}`}
+                              onClick={() => setPopTab("age")}
+                            >
+                              {lang === "ar" ? "العمر" : "Age"}
+                            </button>
+                            <button
+                              type="button"
+                              id="tab-nat"
+                              role="tab"
+                              aria-selected={popTab === "nat"}
+                              aria-controls="panel-nat"
+                              className={`popSegBtn ${popTab === "nat" ? "popSegBtnOn" : ""}`}
+                              onClick={() => setPopTab("nat")}
+                            >
+                              {lang === "ar" ? "الجنسية" : "Nationality"}
+                            </button>
+                          </div>
+                        </div>
+
+                        {(() => {
+                          const rawItems =
+                            popTab === "sex" ? profile?.bySex || [] : popTab === "age" ? profile?.byAge || [] : profile?.byNationality || [];
+
+                          // ✅ enforce ISO2 grouping on nationality
+                          const items = popTab === "nat" ? consolidateNationalityGroups(rawItems) : rawItems;
+
+                          const getLabel =
+                            popTab === "sex"
+                              ? (it) => keyLabelSex(it?.sex)
+                              : popTab === "age"
+                              ? (it) => safeLabel(it?.ageBand)
+                              : (it) => localizeNationality(it?.nationalityCode || it?.nationality, lang);
+
+                          const arr = Array.isArray(items) ? items : [];
+                          const maxN = arr.reduce((m, it) => Math.max(m, Number(it?.n || 0)), 0) || 1;
+
+                          if (!arr.length) return <div className="muted">{t.empty}</div>;
+
+                          const panelId = popTab === "sex" ? "panel-sex" : popTab === "age" ? "panel-age" : "panel-nat";
+
+                          return (
+                            <div id={panelId} role="tabpanel" aria-labelledby={popTab === "sex" ? "tab-sex" : popTab === "age" ? "tab-age" : "tab-nat"}>
+                              <div className="popGrid">
+                                {arr
+                                  .slice()
+                                  .sort((a, b) => Number(b?.n || 0) - Number(a?.n || 0))
+                                  .slice(0, 10)
+                                  .map((it, idx) => {
+                                    const label = getLabel(it);
+                                    const n = Number(it?.n || 0);
+                                    const rate = pickRate(it) ?? it?.rate ?? 0;
+                                    const pctS = fmtPctStrat(rate);
+                                    const weight = Math.round((n / maxN) * 100);
+
+                                    return (
+                                      <div className="popRow" key={idx} title={`${t.cases}: ${pickCases(it) ?? it?.cases ?? "—"} • ${t.signalRate}: ${pctS}`}>
+                                        <div className="popTop">
+                                          <div className="popLabel">{label}</div>
+                                          <div className="popMeta">
+                                            <span className="popPct">{pctS}</span>
+                                            <span className="popN">{Number.isFinite(n) ? n : "—"}</span>
+                                          </div>
+                                        </div>
+
+                                        <div className="popBar">
+                                          <div
+                                            className="popFill"
+                                            style={{
+                                              width: barWidth(rate),
+                                              opacity: 0.75 + 0.25 * (weight / 100),
+                                            }}
+                                          />
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                              </div>
+
+                              <div className="popFooter">
+                                <span className="popHintPill">{lang === "ar" ? "يعرض أعلى 10 فئات" : "Top 10 groups"}</span>
+                                <span>{lang === "ar" ? "ملاحظة: النِسَب تعكس معدل الإشارة داخل كل فئة." : "Note: percentages reflect signal rate within each group."}</span>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
                     </div>
 
                     {insightText ? (
-                      <div
-                        className="reportBox2"
-                        style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }}
-                        dir={isRTL ? "rtl" : "ltr"}
-                      >
+                      <div className="reportBox2" style={{ padding: 12, borderRadius: 12, whiteSpace: "pre-wrap", lineHeight: 1.8 }} dir={isRTL ? "rtl" : "ltr"}>
                         {insightText}
                       </div>
                     ) : null}
@@ -1489,20 +1391,21 @@ export default function SurveillanceDashboard({ lang = "en" }) {
                 )}
               </div>
 
+              {/* 3) Narrative */}
               <div className="card cardWide">
                 <div className="cardHeader">
                   <div className="cardTitle">{t.narrative}</div>
                 </div>
 
-                <div
-                  className="reportBox2"
-                  dir={isRTL ? "rtl" : "ltr"}
-                  style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: 12, borderRadius: 12, minHeight: 180 }}
-                >
+                <div className="reportBox2" dir={isRTL ? "rtl" : "ltr"} style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: 12, borderRadius: 12, minHeight: 180 }}>
                   {reportText || t.empty}
                 </div>
 
-                {!reportText ? <div className="muted" style={{ marginTop: 8 }}>{t.insufficient}</div> : null}
+                {!reportText ? (
+                  <div className="muted" style={{ marginTop: 8 }}>
+                    {t.insufficient}
+                  </div>
+                ) : null}
               </div>
             </>
           ) : null}
@@ -1513,6 +1416,25 @@ export default function SurveillanceDashboard({ lang = "en" }) {
         <div>{t.footerLine1}</div>
         <div>{t.footerLine2}</div>
         <div style={{ opacity: 0.85 }}>{t.footerLine3}</div>
+
+        <div style={{ marginTop: 8, opacity: 0.88 }}>
+          {lang === "ar"
+            ? "ابتكار وتطوير: أحمد رضوان قطوم (مبتكر مستقل) — نموذج تجريبي لدعم الترصد المبكر وتعزيز كفاءة الاستجابة الصحية على المستوى الوطني بالتعاون مع الجهات ذات العلاقة."
+            : "Innovation & development: Ahmad Radwan Qatoum (Independent Innovator) — pilot prototype to support early detection and strengthen national health response capacity in collaboration with relevant stakeholders."}
+        </div>
+
+        {/* ✅ Contact info */}
+        <div className="footerContact" aria-label={lang === "ar" ? "معلومات التواصل" : "Contact information"}>
+          <a className="footerLink" href="mailto:a.qatoum@zedne.org">
+            a.qatoum@zedne.org
+          </a>
+          <span className="footerDot" aria-hidden="true">
+            •
+          </span>
+          <a className="footerLink" href="tel:+962795104967">
+            0795104967
+          </a>
+        </div>
       </footer>
     </div>
   );

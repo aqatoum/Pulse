@@ -208,8 +208,6 @@ function seasonalBaselineCounts({
   seriesByWeek,  // Map weekKey -> {cases}
   yearsBack,
   windowWeeks,
-  guardWeeks,
-  currentIndex,  // index in full series (after fill)
 }) {
   // Using 52-week step for seasonality (practical, stable)
   const counts = [];
@@ -224,7 +222,7 @@ function seasonalBaselineCounts({
       const key = getWeekKey(candidate);
       const val = seriesByWeek.get(key);
 
-      // If missing week in history, treat as 0 (consistent with fillMissingWeeks philosophy)
+      // If missing week in history, treat as 0
       const cases = val ? (typeof val.cases === "number" ? val.cases : 0) : 0;
       counts.push(cases);
     }
@@ -244,18 +242,18 @@ function computeSignalFarrington({
   // core parameters
   yearsBack = 2,        // 2–5 recommended for real surveillance
   windowWeeks = 2,      // seasonal window ±2 weeks
-  baselineWeeks = 12,   // fallback if you ever want non-seasonal; kept for output compat
-  guardWeeks = 2,       // don't use very recent weeks in baseline (anti-leak)
+  baselineWeeks = 12,   // kept for output compat
+  guardWeeks = 2,       // kept for meta compat
 
   z = 2.0,
   lang = "both",
   preset = "standard",
   timeRange = null,
 
-  mode = "total",       // "total" | "high" | "low"
-  minWeeksCoverage = 52, // ✅ your requirement: at least 1 year after filling
-  minBaselinePoints = 12, // seasonal baseline points count threshold
-  minExpected = 0.2,     // avoid tiny expected -> noisy UCL
+  mode = "total",        // "total" | "high" | "low"
+  minWeeksCoverage = 52, // at least 1 year after filling
+  minBaselinePoints = 12,
+  minExpected = 0.2,
 }) {
   const tc = normCode(testCode);
   const caseDef = buildCaseDef(tc);
@@ -325,7 +323,7 @@ function computeSignalFarrington({
     };
   }
 
-  // ✅ fill missing weeks (critical for accurate coverage)
+  // fill missing weeks
   const allWeeks = fillMissingWeeksFromKeys(weeksRaw);
 
   // build full series with zero-filled missing weeks
@@ -365,8 +363,12 @@ function computeSignalFarrington({
     };
   }
 
+  // ✅ FIX: seasonal baseline points count
+  const seasonalPoints = yearsBack * (2 * windowWeeks + 1);
+  const effectiveMinBaselinePoints = Math.min(minBaselinePoints, seasonalPoints);
+
   // compute points
-  const points = allWeeks.map((wk, idx) => {
+  const points = allWeeks.map((wk) => {
     const cur = seriesByWeek.get(wk);
     const wkStart = weekKeyToStartDate(wk);
 
@@ -378,14 +380,11 @@ function computeSignalFarrington({
         seriesByWeek,
         yearsBack,
         windowWeeks,
-        guardWeeks,
-        currentIndex: idx,
       });
     }
 
     const baselineUsed = base.length;
 
-    // expected and phi (overdispersion)
     let expected = mean(base);
     if (expected == null) expected = 0;
     expected = Math.max(expected, minExpected);
@@ -395,8 +394,7 @@ function computeSignalFarrington({
 
     const UCL = expected + z * Math.sqrt(Math.max(phi * expected, 0));
 
-    // alert only if baseline enough AND we are past early part of series
-    const canAlert = baselineUsed >= minBaselinePoints;
+    const canAlert = baselineUsed >= effectiveMinBaselinePoints;
     const alert = canAlert ? cur.cases > UCL : false;
 
     return {
@@ -404,7 +402,7 @@ function computeSignalFarrington({
       n: cur.n,
       low: cur.low,
       high: cur.high,
-      cases: cur.cases, // cases used by model (mode-based)
+      cases: cur.cases,
       expected: Number(expected.toFixed(2)),
       phi: Number(phi.toFixed(2)),
       UCL: Number(UCL.toFixed(2)),
@@ -415,28 +413,32 @@ function computeSignalFarrington({
   });
 
   const last = latest(points);
+  const lastWeek = last?.week || "—";
+  const lastCases = last?.cases ?? 0;
+  const lastUCL = last?.UCL ?? 0;
+  const lastAlert = last?.alert ? "YES" : "NO";
 
   const modeLabelEn =
     mode === "high" ? "HIGH-only" : mode === "low" ? "LOW-only" : "out-of-range (LOW+HIGH)";
   const modeLabelAr =
     mode === "high" ? "مرتفع فقط" : mode === "low" ? "منخفض فقط" : "خارج المجال (منخفض+مرتفع)";
 
-  const interpEn = `Seasonal Farrington-like check on weekly ${modeLabelEn} cases for ${tc}. Coverage=${weeksCoverage} weeks. Latest ${last.week}: cases=${last.cases}, UCL=${last.UCL}, alert=${last.alert ? "YES" : "NO"}.`;
-  const interpAr = `تم فحص Farrington الموسمي (مبسّط) لعدد الحالات (${modeLabelAr}) أسبوعيًا للفحص ${tc}. التغطية=${weeksCoverage} أسبوعًا. آخر أسبوع ${last.week}: الحالات=${last.cases}، الحد الأعلى=${last.UCL}، إنذار=${last.alert ? "نعم" : "لا"}.`;
+  const interpEn = `Seasonal Farrington-like check on weekly ${modeLabelEn} cases for ${tc}. Coverage=${weeksCoverage} weeks. Latest ${lastWeek}: cases=${lastCases}, UCL=${lastUCL}, alert=${lastAlert}.`;
+  const interpAr = `تم فحص Farrington الموسمي (مبسّط) لعدد الحالات (${modeLabelAr}) أسبوعيًا للفحص ${tc}. التغطية=${weeksCoverage} أسبوعًا. آخر أسبوع ${lastWeek}: الحالات=${lastCases}، الحد الأعلى=${lastUCL}، إنذار=${lastAlert === "YES" ? "نعم" : "لا"}.`;
 
   return {
     farrington: {
-      baselineWeeks, // kept for UI/backward compat
+      baselineWeeks,
       z,
       yearsBack,
       windowWeeks,
-      minBaselinePoints,
+      minBaselinePoints: effectiveMinBaselinePoints,
       direction: caseDef.direction,
       mode,
       testCode: tc,
       points,
       dataSufficiency: { ok: true, weeksCoverage },
-      meta: { unit: caseDef.unit || null, preset, filledMissingWeeks: true, guardWeeks },
+      meta: { unit: caseDef.unit || null, preset, filledMissingWeeks: true, guardWeeks, seasonalPoints },
     },
     interpretation: lang === "both" ? { ar: interpAr, en: interpEn } : lang === "ar" ? interpAr : interpEn,
   };
@@ -444,7 +446,7 @@ function computeSignalFarrington({
 
 // Backward-compatible wrapper
 function computeAnemiaFarrington(args) {
-  return computeSignalFarrington({ ...args, testCode: "HB" });
+  return computeSignalFarrington({ ...args, testCode: "HB", mode: args?.mode || "low" });
 }
 
 module.exports = { computeSignalFarrington, computeAnemiaFarrington };

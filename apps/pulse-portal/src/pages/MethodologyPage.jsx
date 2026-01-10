@@ -4,47 +4,60 @@ const TXT = {
   ar: {
     title: "المنهجية العلمية",
     intro:
-      "يعتمد نظام PULSE على مراقبة إحصائية سكانية متعددة الطبقات لاكتشاف الانحرافات المبكرة في نتائج الفحوصات المخبرية على مستوى المجتمع، وليس لتشخيص الأفراد.",
-    data: "1) البيانات",
+      "يعتمد نظام PULSE على إطار تحليلي إحصائي سكاني (Population-level Analytical Framework) يهدف إلى رصد الانحرافات المبكرة في الإشارات المخبرية الروتينية على مستوى المجتمع. يعمل النظام كطبقة تحليلية داعمة للقرار، ولا يُستخدم للتشخيص الفردي أو اتخاذ قرارات سريرية.",
+
+    data: "1) مصادر البيانات ونطاق التحليل",
     dataTxt:
-      "يتم إدخال نتائج الفحوصات من CSV أو من أنظمة المختبر، مع التحقق من الجودة (القيم المفقودة، تواريخ غير صالحة، قيم Hb غير منطقية).",
-    methods: "2) الطرق الإحصائية",
+      "يعالج النظام بيانات فحوصات مخبرية روتينية مُجمَّعة (مثل CBC) يتم إدخالها من ملفات CSV أو من أنظمة المختبر القائمة. تُطبّق عمليات تحقق جودة صارمة تشمل سلامة التواريخ، اكتمال القيم، واتساق النطاقات المرجعية، مع إزالة أي مُعرِّفات شخصية قبل التحليل.",
+
+    methods: "2) نماذج الرصد الإحصائي",
     methodsTxt:
-      "تُستخدم خوارزميات مراقبة معروفة عالميًا: EWMA لاكتشاف الانحرافات التدريجية، CUSUM للتغيرات الصغيرة المستمرة، وFarrington للتنبؤ بالمتوقع ومقارنته بالمشاهد.",
-    ensemble: "3) التجميع (Ensemble)",
+      "يستخدم PULSE نماذج رصد إحصائية معتمدة عالميًا في الصحة العامة: EWMA لاكتشاف الانحرافات التدريجية، CUSUM لرصد التغيرات الصغيرة المستمرة، ونموذج Farrington لمقارنة القيم المرصودة بالتوقعات التاريخية. تعمل هذه النماذج كخطوط أساس تفسيرية قابلة للتدقيق.",
+
+    ensemble: "3) منطق الدمج والتحقق (Hybrid Decision Logic)",
     ensembleTxt:
-      "يتم دمج نتائج الطرق في قرار إجماعي يقلل الإنذارات الكاذبة ويزيد الثبات والموثوقية.",
-    strat: "4) التقسيم السكاني",
+      "تُدمج مخرجات النماذج المختلفة ضمن منطق قرار تجميعي يقيّم التوافق والاستمرارية عبر الزمن، بهدف تقليل الإنذارات الكاذبة وزيادة ثبات الإشارة دون الاعتماد على نموذج واحد.",
+
+    strat: "4) التقسيم السكاني والتحليل السياقي",
     stratTxt:
-      "تحليل حسب العمر/الجنس لتحديد الفئات الأكثر تأثرًا وتوجيه التدخلات (تغذية/تثقيف/متابعة) بشكل أدق.",
-    output: "5) المخرجات",
+      "تُحلَّل الإشارات على مستوى الفئات السكانية (العمر، الجنس) لتمييز الأنماط غير المتجانسة داخل المجتمع، ودعم التفسير التحليلي الموجّه على مستوى السكان.",
+
+    output: "5) المخرجات ودعم القرار",
     outputTxt:
-      "تقارير سردية مفهومة للجان وصناع القرار، مع توصيات عملية مبنية على البيانات.",
+      "ينتج النظام مؤشرات تحليلية وتقارير سردية واضحة موجّهة للجان والخبراء وصنّاع القرار، تركّز على وصف ما يحدث على مستوى السكان، دون تقديم تشخيص أو توصيات علاجية.",
+
     disclaimer:
-      "تنويه: هذا النظام أداة دعم قرار سكاني ولا يُستخدم لتشخيص الحالات الفردية.",
+      "تنويه منهجي: PULSE نظام دعم قرار سكاني تحليلي، ولا يُستخدم لتشخيص الحالات الفردية أو تقديم إرشادات طبية."
   },
+
   en: {
     title: "Scientific Methodology",
     intro:
-      "PULSE implements a multi-layer population-level statistical surveillance approach to detect early deviations in laboratory results. It is not intended for individual diagnosis.",
-    data: "1) Data",
+      "PULSE operates as a population-level analytical framework designed to detect early deviations in routine laboratory signals. The system functions as a decision-support overlay and is not intended for individual diagnosis or clinical decision-making.",
+
+    data: "1) Data Sources and Analytical Scope",
     dataTxt:
-      "Laboratory results are ingested from CSV or lab systems with systematic quality checks (missingness, invalid dates, out-of-range Hb values).",
-    methods: "2) Statistical Methods",
+      "The system processes aggregated routine laboratory data (e.g., CBC) ingested from CSV files or existing laboratory systems. Rigorous quality checks are applied, including validation of timestamps, completeness, and reference consistency. All personal identifiers are removed prior to analysis.",
+
+    methods: "2) Statistical Surveillance Models",
     methodsTxt:
-      "Internationally recognized algorithms are applied: EWMA for gradual drifts, CUSUM for persistent small shifts, and Farrington-style expected-vs-observed alerting.",
-    ensemble: "3) Ensemble Decision",
+      "PULSE applies internationally validated public-health surveillance methods: EWMA for gradual signal drift, CUSUM for persistent small shifts, and the Farrington approach for expected-versus-observed deviation detection. These models provide transparent and auditable analytical baselines.",
+
+    ensemble: "3) Hybrid Decision Logic",
     ensembleTxt:
-      "Multiple method outputs are combined into a single consensus decision to reduce false alarms and improve robustness.",
-    strat: "4) Population Stratification",
+      "Outputs from multiple models are integrated using a hybrid consensus logic that evaluates agreement and persistence over time. This approach improves robustness and reduces false alerts without relying on a single detection method.",
+
+    strat: "4) Population Stratification and Contextual Analysis",
     stratTxt:
-      "Stratification by age/sex helps identify vulnerable subgroups and supports targeted interventions.",
-    output: "5) Outputs",
+      "Signals are examined across population subgroups (age and sex) to identify heterogeneous patterns and support targeted analytical interpretation at the population level.",
+
+    output: "5) Outputs and Decision Support",
     outputTxt:
-      "Committee-friendly narrative reports and actionable recommendations based on the data.",
+      "The system produces clear analytical indicators and narrative reports tailored for expert committees and decision-makers, focusing on population-level trends rather than individual outcomes.",
+
     disclaimer:
-      "Disclaimer: This is a population-level decision-support tool and must not be used for individual medical diagnosis.",
-  },
+      "Disclaimer: PULSE is a population-level analytical decision-support system and must not be used for individual medical diagnosis or treatment decisions."
+  }
 };
 
 export default function MethodologyPage({ lang = "ar" }) {

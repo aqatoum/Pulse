@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "pulse-482504",
     "public": "dist",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "headers": [
@@ -13,7 +14,7 @@
     "rewrites": [
       {
         "source": "/api/**",
-        "destination": "https://pulse-api-857293120102.europe-west1.run.app/"
+        "run": { "serviceId": "pulse-api", "region": "europe-west1" }
       },
       {
         "source": "**",

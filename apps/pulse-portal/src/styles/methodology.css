@@ -1,50 +1,68 @@
+/* src/styles/methodology.css
+   Ministry Light — Methodology page
+   IMPORTANT: Do NOT define :root here.
+*/
+
 .meth{
-  position:relative;
-  z-index:2;
-  padding: 6px;
+  position: relative;
+  z-index: 2;
+  padding: 8px;
 }
 
-.methHeader{
-  padding: 14px 6px 10px;
-}
+.methHeader{ padding: 16px 8px 12px; }
 
 .methTitle{
-  font-size:18px;
-  font-weight:1000;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: .2px;
+  color: var(--textHi);
 }
 
 .methSub{
-  margin-top:8px;
-  color: var(--muted);
-  line-height: 1.7;
+  margin-top: 8px;
+  color: rgba(15,23,42,.62);
+  line-height: 1.75;
+  font-size: 13px;
 }
 
 .methCard{
-  margin-top:12px;
-  border:1px solid var(--stroke);
-  border-radius: var(--radius);
-  background: rgba(255,255,255,.04);
-  box-shadow: var(--shadow);
+  margin-top: 12px;
   padding: 16px;
+  border-radius: var(--radius2);
+  border: 1px solid rgba(15,23,42,.08);
+  background: rgba(255,255,255,.90);
+  box-shadow: var(--shadow2);
 }
 
 .methH{
-  font-weight: 1000;
-  margin-bottom: 10px;
+  font-weight: 800;
+  margin: 0 0 10px;
+  color: var(--textHi);
+  letter-spacing: .2px;
 }
 
 .methList{
-  margin:0;
+  margin: 0;
   padding-inline-start: 18px;
-  line-height: 1.8;
-  color: rgba(255,255,255,.88);
+  line-height: 1.85;
+  color: rgba(15,23,42,.78);
 }
+
+.methList li{ margin: 6px 0; }
+.methList li::marker{ color: rgba(37,99,235,.70); }
 
 .methNote{
   margin-top: 12px;
-  padding: 12px;
+  padding: 12px 14px;
   border-radius: 16px;
-  border:1px solid rgba(47,125,255,.20);
-  background: rgba(47,125,255,.10);
-  color: rgba(255,255,255,.90);
+  border: 1px solid rgba(37,99,235,.18);
+  background: rgba(37,99,235,.06);
+  color: rgba(15,23,42,.82);
+  box-shadow: 0 10px 26px rgba(15,23,42,.06);
+}
+.methNote b{ color: var(--textHi); }
+
+[dir="rtl"] .methList{
+  padding-inline-start: 0;
+  padding-inline-end: 18px;
 }

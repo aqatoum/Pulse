@@ -15,7 +15,6 @@ const { apiOk, apiError } = require("../utils/response");
 const ANALYTICS_DEFAULTS = require("../config/analytics.defaults");
 const precheckRoutes = require("./analytics.precheck.routes");
 
-
 // ✅ ML-assisted explanation report generator (template-based, does NOT replace stats)
 let generateExplanationReport = null;
 try {
@@ -108,8 +107,46 @@ function defaultTestCodeForSignal(signal) {
   if (s === "wbc") return "WBC";
   if (s === "crp") return "CRP";
   if (s === "plt") return "PLT";
-  // anemia default
   return "HB";
+}
+
+/* ===============================
+   ✅ Farrington mode resolver (NEW)
+   HB/anemia => low cases
+   CRP/WBC => high cases
+   =============================== */
+function defaultFarringtonMode(signal, testCode) {
+  const s = String(signal || "").toLowerCase();
+  const tc = String(testCode || "").toUpperCase();
+
+  if (s === "anemia" || tc === "HB") return "low";
+  if (s === "crp" || s === "wbc" || tc === "CRP" || tc === "WBC") return "high";
+  return "total";
+}
+
+/* ===============================
+   ✅ Failsafe wrapper for Farrington (NEW)
+   =============================== */
+function safeRunFarrington(fn, args) {
+  try {
+    return fn(args);
+  } catch (e) {
+    return {
+      farrington: {
+        points: [],
+        testCode: String(args?.testCode || "—"),
+        dataSufficiency: {
+          ok: false,
+          reason: "FARRINGTON_RUNTIME_ERROR",
+          message: e?.message || "Unknown error",
+        },
+      },
+      interpretation:
+        args?.lang === "ar"
+          ? "تعذّر تشغيل Farrington بسبب خطأ داخلي."
+          : "Farrington failed due to an internal error.",
+    };
+  }
 }
 
 /* ===============================
@@ -393,7 +430,6 @@ function withScopeTop(scopeRes) {
 
 /* ===============================
    ✅ QUALITY ROW NORMALIZER (NEW)
-   Makes scanRowsQuality robust even if upstream field names vary.
    =============================== */
 function normalizeRowForQuality(r) {
   const value =
@@ -524,7 +560,6 @@ router.get("/anemia-profile", async (req, res) => {
     const lang = normalizeLang(req.query.lang, "both");
     const signal = String(req.query.signal || "anemia").trim().toLowerCase();
 
-    // ✅ accept testCode or infer
     const testCode = normCode(req.query.testCode || defaultTestCodeForSignal(signal));
 
     const dateFilter = getDateRangeFilter(req);
@@ -534,7 +569,6 @@ router.get("/anemia-profile", async (req, res) => {
       testCode,
     });
 
-    // ✅ NEW: robust quality scan input
     const rowsForQuality = (rows || []).map(normalizeRowForQuality);
     const dataQualityScan = scanRowsQuality({ rows: rowsForQuality, rawCount });
 
@@ -581,8 +615,6 @@ router.get("/run", async (req, res) => {
     const lang = normalizeLang(req.query.lang, "both");
     const signal = String(req.query.signal || "anemia").trim().toLowerCase();
 
-    // ✅ CRITICAL FIX:
-    // Always have a testCode: either query or inferred from signal
     const testCode = normCode(req.query.testCode || defaultTestCodeForSignal(signal));
 
     const params = getAnemiaParams(req);
@@ -600,7 +632,6 @@ router.get("/run", async (req, res) => {
 
     const { rows, dateRange, rawCount } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
 
-    // ✅ NEW: robust quality scan input
     const rowsForQuality = (rows || []).map(normalizeRowForQuality);
     const dataQualityScan = scanRowsQuality({ rows: rowsForQuality, rawCount });
 
@@ -640,17 +671,21 @@ router.get("/run", async (req, res) => {
 
       if (method === "farrington") {
         const fn = signal === "anemia" ? computeAnemiaFarrington : computeSignalFarrington;
-        const { farrington, interpretation } = fn({
+
+        const out = safeRunFarrington(fn, {
           rows,
           signalType: signal,
           testCode,
           ...params.farrington,
+          // ✅ CRITICAL: set correct mode
+          mode: String(req.query.farringtonMode || defaultFarringtonMode(signal, testCode)),
           lang,
           preset: params.preset,
           timeRange: dateRange.filtered,
         });
-        results.farrington = farrington;
-        interpretations.farrington = pickInterpretationForConsensus(interpretation, lang);
+
+        results.farrington = out.farrington;
+        interpretations.farrington = pickInterpretationForConsensus(out.interpretation, lang);
       }
     }
 
@@ -662,10 +697,8 @@ router.get("/run", async (req, res) => {
     const profile = profOut?.profile || null;
     const profileInsight = profOut?.insight || null;
 
-    // ✅ First consensus (service)
     let consensus = buildConsensus({ interpretations, methods });
 
-    // ✅ Ensure consensus.perMethod is filled & consistent
     const perMethod = {};
     for (const method of methods) {
       const interp = extractMethodInterpretation(interpretations?.[method]);
@@ -681,7 +714,6 @@ router.get("/run", async (req, res) => {
       perMethod: computedConsensus.perMethod,
     };
 
-    // ✅ Signature Insight
     const signatureInsight =
       lang === "both"
         ? {
@@ -757,8 +789,6 @@ router.get("/run", async (req, res) => {
 
 /* ===============================
    REPORT — /api/analytics/report
-   default = ML explanation report (template-based)
-   Backward-compatible: reportType=narrative returns old buildReport
    =============================== */
 router.get("/report", async (req, res) => {
   try {
@@ -768,7 +798,6 @@ router.get("/report", async (req, res) => {
     const lang = normalizeLang(req.query.lang, "both");
     const signal = String(req.query.signal || "anemia").trim().toLowerCase();
 
-    // ✅ Always infer testCode if not provided
     const testCode = normCode(req.query.testCode || defaultTestCodeForSignal(signal));
 
     const params = getAnemiaParams(req);
@@ -786,7 +815,6 @@ router.get("/report", async (req, res) => {
 
     const { rows, dateRange, rawCount } = await loadSignalRows({ scope: scopeRes.scope, dateFilter, testCode });
 
-    // ✅ NEW: robust quality scan input
     const rowsForQuality = (rows || []).map(normalizeRowForQuality);
     const dataQualityScan = scanRowsQuality({ rows: rowsForQuality, rawCount });
 
@@ -826,17 +854,20 @@ router.get("/report", async (req, res) => {
 
       if (method === "farrington") {
         const fn = signal === "anemia" ? computeAnemiaFarrington : computeSignalFarrington;
-        const { farrington, interpretation } = fn({
+
+        const out = safeRunFarrington(fn, {
           rows,
           signalType: signal,
           testCode,
           ...params.farrington,
+          mode: String(req.query.farringtonMode || defaultFarringtonMode(signal, testCode)),
           lang,
           preset: params.preset,
           timeRange: dateRange.filtered,
         });
-        results.farrington = farrington;
-        interpretationsForConsensus.farrington = pickInterpretationForConsensus(interpretation, lang);
+
+        results.farrington = out.farrington;
+        interpretationsForConsensus.farrington = pickInterpretationForConsensus(out.interpretation, lang);
       }
     }
 
@@ -848,7 +879,6 @@ router.get("/report", async (req, res) => {
     const profile = profOut?.profile || null;
     const profileInsight = profOut?.insight || null;
 
-    // ✅ consensus consistent with method points
     const perMethod = {};
     for (const method of methods) {
       const interp = extractMethodInterpretation(interpretationsForConsensus?.[method]);
@@ -907,7 +937,6 @@ router.get("/report", async (req, res) => {
     const scopeLabelAr = humanScopeLabel(scopeRes.scope, "ar");
     const scopeLabelEn = humanScopeLabel(scopeRes.scope, "en");
 
-    // ✅ Choose report type WITHOUT breaking old one
     const reportTypeRaw = String(req.query.reportType || "ml").toLowerCase();
     const wantNarrative = reportTypeRaw === "narrative" || reportTypeRaw === "legacy" || reportTypeRaw === "old";
 
