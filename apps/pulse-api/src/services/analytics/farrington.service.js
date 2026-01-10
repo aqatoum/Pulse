@@ -40,12 +40,19 @@ function weekKeyToStartDate(weekKey) {
   // "YYYY-Www"
   const m = String(weekKey || "").match(/^(\d{4})-W(\d{2})$/);
   if (!m) return null;
+
   const y = Number(m[1]);
   const w = Number(m[2]);
-  if (!Number.isFinite(y) || !Number.isFinite(w)) return null;
-  // Monday of ISO week
-  return dayjs().isoWeekYear(y).isoWeek(w).startOf("isoWeek");
+  if (!Number.isFinite(y) || !Number.isFinite(w) || w < 1 || w > 53) return null;
+
+  // ISO week 1 always contains Jan 4
+  const jan4 = dayjs(`${y}-01-04`);
+  // Start of ISO week 1 (Monday)
+  const week1Start = jan4.startOf("isoWeek");
+  // Start date of requested ISO week
+  return week1Start.add(w - 1, "week").startOf("isoWeek");
 }
+
 
 // Accept both shapes: {start,end} OR {from,to}
 function normalizeTimeRange(timeRange) {
